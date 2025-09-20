@@ -19,12 +19,88 @@ impl JsonSchema {
         })
     }
 
+    pub fn from_value(value: &Value) -> Result<Self, JsonSchemaError> {
+        let schema = Self::value_to_schema(value);
+        Ok(JsonSchema { schema })
+    }
+
     pub fn as_value(&self) -> &Value {
         &self.schema
     }
 
     pub fn to_string(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(&self.schema)
+    }
+
+    fn value_to_schema(value: &Value) -> Value {
+        match value {
+            Value::Null => {
+                let mut schema = Map::new();
+                schema.insert("type".to_string(), Value::String("null".to_string()));
+                Value::Object(schema)
+            }
+            Value::Bool(_) => {
+                let mut schema = Map::new();
+                schema.insert("type".to_string(), Value::String("boolean".to_string()));
+                Value::Object(schema)
+            }
+            Value::Number(n) => {
+                let mut schema = Map::new();
+                let type_name = if n.is_i64() || n.is_u64() {
+                    "integer"
+                } else {
+                    "number"
+                };
+                schema.insert("type".to_string(), Value::String(type_name.to_string()));
+                Value::Object(schema)
+            }
+            Value::String(_) => {
+                let mut schema = Map::new();
+                schema.insert("type".to_string(), Value::String("string".to_string()));
+                Value::Object(schema)
+            }
+            Value::Array(arr) => {
+                let mut schema = Map::new();
+                schema.insert("type".to_string(), Value::String("array".to_string()));
+
+                if arr.is_empty() {
+                    schema.insert(
+                        "items".to_string(),
+                        Value::Object({
+                            let mut item_schema = Map::new();
+                            item_schema
+                                .insert("type".to_string(), Value::String("null".to_string()));
+                            item_schema
+                        }),
+                    );
+                } else {
+                    let item_schemas: Vec<Value> = arr.iter().map(Self::value_to_schema).collect();
+
+                    if item_schemas.iter().all(|s| s == &item_schemas[0]) {
+                        schema.insert("items".to_string(), item_schemas[0].clone());
+                    } else {
+                        schema.insert("items".to_string(), Value::Array(item_schemas));
+                    }
+                }
+                Value::Object(schema)
+            }
+            Value::Object(obj) => {
+                let mut schema = Map::new();
+                schema.insert("type".to_string(), Value::String("object".to_string()));
+
+                let mut properties = Map::new();
+                let mut required = Vec::new();
+
+                for (key, val) in obj {
+                    properties.insert(key.clone(), Self::value_to_schema(val));
+                    required.push(Value::String(key.clone()));
+                }
+
+                schema.insert("properties".to_string(), Value::Object(properties));
+                schema.insert("required".to_string(), Value::Array(required));
+                Value::Object(schema)
+            }
+        }
     }
 }
 
@@ -685,5 +761,192 @@ mod tests {
 
         assert_eq!(*schema.as_value(), expected);
         println!("HashMap schema: {}", schema.to_string().unwrap());
+    }
+
+    #[test]
+    fn from_value_primitive_types() {
+        let null_value = Value::Null;
+        let schema = JsonSchema::from_value(&null_value).unwrap();
+        let expected = serde_json::json!({ "type": "null" });
+        assert_eq!(*schema.as_value(), expected);
+
+        let bool_value = serde_json::json!(true);
+        let schema = JsonSchema::from_value(&bool_value).unwrap();
+        let expected = serde_json::json!({ "type": "boolean" });
+        assert_eq!(*schema.as_value(), expected);
+
+        let string_value = serde_json::json!("hello");
+        let schema = JsonSchema::from_value(&string_value).unwrap();
+        let expected = serde_json::json!({ "type": "string" });
+        assert_eq!(*schema.as_value(), expected);
+
+        let integer_value = serde_json::json!(42);
+        let schema = JsonSchema::from_value(&integer_value).unwrap();
+        let expected = serde_json::json!({ "type": "integer" });
+        assert_eq!(*schema.as_value(), expected);
+
+        let float_value = serde_json::json!(2.5);
+        let schema = JsonSchema::from_value(&float_value).unwrap();
+        let expected = serde_json::json!({ "type": "number" });
+        assert_eq!(*schema.as_value(), expected);
+    }
+
+    #[test]
+    fn from_value_object() {
+        let value = serde_json::json!({
+            "name": "John",
+            "age": 30,
+            "active": true
+        });
+        let schema = JsonSchema::from_value(&value).unwrap();
+        let expected = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string" },
+                "age": { "type": "integer" },
+                "active": { "type": "boolean" }
+            },
+            "required": ["active", "age", "name"]
+        });
+        assert_eq!(*schema.as_value(), expected);
+    }
+
+    #[test]
+    fn from_value_nested_object() {
+        let value = serde_json::json!({
+            "user": {
+                "name": "Jane",
+                "email": "jane@example.com"
+            },
+            "score": 95.5
+        });
+        let schema = JsonSchema::from_value(&value).unwrap();
+        let expected = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "user": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string" },
+                        "email": { "type": "string" }
+                    },
+                    "required": ["email", "name"]
+                },
+                "score": { "type": "number" }
+            },
+            "required": ["score", "user"]
+        });
+        assert_eq!(*schema.as_value(), expected);
+    }
+
+    #[test]
+    fn from_value_array_homogeneous() {
+        let value = serde_json::json!([1, 2, 3, 4]);
+        let schema = JsonSchema::from_value(&value).unwrap();
+        let expected = serde_json::json!({
+            "type": "array",
+            "items": { "type": "integer" }
+        });
+        assert_eq!(*schema.as_value(), expected);
+    }
+
+    #[test]
+    fn from_value_array_heterogeneous() {
+        let value = serde_json::json!([1, "hello", true]);
+        let schema = JsonSchema::from_value(&value).unwrap();
+        let expected = serde_json::json!({
+            "type": "array",
+            "items": [
+                { "type": "integer" },
+                { "type": "string" },
+                { "type": "boolean" }
+            ]
+        });
+        assert_eq!(*schema.as_value(), expected);
+    }
+
+    #[test]
+    fn from_value_empty_array() {
+        let value = serde_json::json!([]);
+        let schema = JsonSchema::from_value(&value).unwrap();
+        let expected = serde_json::json!({
+            "type": "array",
+            "items": { "type": "null" }
+        });
+        assert_eq!(*schema.as_value(), expected);
+    }
+
+    #[test]
+    fn from_value_array_of_objects() {
+        let value = serde_json::json!([
+            { "name": "Alice", "age": 25 },
+            { "name": "Bob", "age": 30 }
+        ]);
+        let schema = JsonSchema::from_value(&value).unwrap();
+        let expected = serde_json::json!({
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" },
+                    "age": { "type": "integer" }
+                },
+                "required": ["age", "name"]
+            }
+        });
+        assert_eq!(*schema.as_value(), expected);
+    }
+
+    #[test]
+    fn from_value_complex_nested() {
+        let value = serde_json::json!({
+            "metadata": {
+                "version": "1.0",
+                "tags": ["api", "json", "schema"]
+            },
+            "data": [
+                {
+                    "id": 1,
+                    "items": [10, 20, 30]
+                },
+                {
+                    "id": 2,
+                    "items": [40, 50]
+                }
+            ]
+        });
+        let schema = JsonSchema::from_value(&value).unwrap();
+        let expected = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "metadata": {
+                    "type": "object",
+                    "properties": {
+                        "version": { "type": "string" },
+                        "tags": {
+                            "type": "array",
+                            "items": { "type": "string" }
+                        }
+                    },
+                    "required": ["tags", "version"]
+                },
+                "data": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": { "type": "integer" },
+                            "items": {
+                                "type": "array",
+                                "items": { "type": "integer" }
+                            }
+                        },
+                        "required": ["id", "items"]
+                    }
+                }
+            },
+            "required": ["data", "metadata"]
+        });
+        assert_eq!(*schema.as_value(), expected);
     }
 }
