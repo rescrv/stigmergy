@@ -173,19 +173,30 @@ async fn create_entity(
     let entity = match request.entity {
         Some(entity) => entity,
         None => {
-            // Generate a random entity if none provided
-            let mut random_bytes = [0u8; 32];
-            match File::open("/dev/urandom") {
-                Ok(mut file) => {
-                    if file.read_exact(&mut random_bytes).is_err() {
+            // Generate a random entity if none provided, avoiding - and _ characters
+            loop {
+                let mut random_bytes = [0u8; 32];
+                match File::open("/dev/urandom") {
+                    Ok(mut file) => {
+                        if file.read_exact(&mut random_bytes).is_err() {
+                            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+                        }
+                    }
+                    Err(_) => {
                         return Err(StatusCode::INTERNAL_SERVER_ERROR);
                     }
                 }
-                Err(_) => {
-                    return Err(StatusCode::INTERNAL_SERVER_ERROR);
+
+                let entity = Entity::new(random_bytes);
+                let entity_string = entity.to_string();
+
+                // Check if the base64 part contains - or _
+                let base64_part = &entity_string[7..]; // Skip "entity:"
+                if !base64_part.contains('-') && !base64_part.contains('_') {
+                    break entity;
                 }
+                // If it contains - or _, continue the loop to generate a new one
             }
-            Entity::new(random_bytes)
         }
     };
 
@@ -431,6 +442,45 @@ mod tests {
         assert!(response.0.created);
         // The entity should be randomly generated (not all zeros)
         assert_ne!(response.0.entity, Entity::new([0u8; 32]));
+    }
+
+    #[tokio::test]
+    async fn create_entity_avoids_special_characters() {
+        // Generate multiple random entities and verify none contain - or _
+        for _ in 0..1000 {
+            let request = CreateEntityRequest { entity: None };
+
+            let response = create_entity(Json(request)).await;
+
+            // Must succeed - if /dev/urandom is not available, fail the test
+            let response =
+                response.expect("/dev/urandom should be available for random entity generation");
+
+            let entity_string = response.0.entity.to_string();
+            let base64_part = &entity_string[7..]; // Skip "entity:"
+
+            // Ensure no - or _ characters in the base64 part
+            assert!(
+                !base64_part.contains('-'),
+                "Generated entity ID contains '-': {}",
+                entity_string
+            );
+            assert!(
+                !base64_part.contains('_'),
+                "Generated entity ID contains '_': {}",
+                entity_string
+            );
+
+            // Should only contain alphanumeric characters
+            for c in base64_part.chars() {
+                assert!(
+                    c.is_ascii_alphanumeric(),
+                    "Generated entity ID contains non-alphanumeric character '{}': {}",
+                    c,
+                    entity_string
+                );
+            }
+        }
     }
 
     #[tokio::test]
