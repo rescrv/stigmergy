@@ -4,6 +4,19 @@ use serde::ser::{
 };
 use serde_json::{Map, Value};
 
+pub(crate) const TYPE_KEY: &str = "type";
+pub(crate) const TYPE_NULL: &str = "null";
+pub(crate) const TYPE_BOOLEAN: &str = "boolean";
+pub(crate) const TYPE_INTEGER: &str = "integer";
+pub(crate) const TYPE_NUMBER: &str = "number";
+pub(crate) const TYPE_STRING: &str = "string";
+pub(crate) const TYPE_ARRAY: &str = "array";
+pub(crate) const TYPE_OBJECT: &str = "object";
+pub(crate) const PROPERTIES_KEY: &str = "properties";
+pub(crate) const REQUIRED_KEY: &str = "required";
+pub(crate) const ITEMS_KEY: &str = "items";
+pub(crate) const ENUM_KEY: &str = "enum";
+
 #[derive(Debug, Clone)]
 pub struct JsonSchema {
     schema: Value,
@@ -32,61 +45,66 @@ impl JsonSchema {
         serde_json::to_string_pretty(&self.schema)
     }
 
+    // TODO(claude): Extract schema creation logic to reduce duplication with SchemaGenerator
     fn value_to_schema(value: &Value) -> Value {
         match value {
             Value::Null => {
                 let mut schema = Map::new();
-                schema.insert("type".to_string(), Value::String("null".to_string()));
+                schema.insert(TYPE_KEY.to_string(), Value::String(TYPE_NULL.to_string()));
                 Value::Object(schema)
             }
             Value::Bool(_) => {
                 let mut schema = Map::new();
-                schema.insert("type".to_string(), Value::String("boolean".to_string()));
+                schema.insert(
+                    TYPE_KEY.to_string(),
+                    Value::String(TYPE_BOOLEAN.to_string()),
+                );
                 Value::Object(schema)
             }
             Value::Number(n) => {
                 let mut schema = Map::new();
                 let type_name = if n.is_i64() || n.is_u64() {
-                    "integer"
+                    TYPE_INTEGER
                 } else {
-                    "number"
+                    TYPE_NUMBER
                 };
-                schema.insert("type".to_string(), Value::String(type_name.to_string()));
+                schema.insert(TYPE_KEY.to_string(), Value::String(type_name.to_string()));
                 Value::Object(schema)
             }
             Value::String(_) => {
                 let mut schema = Map::new();
-                schema.insert("type".to_string(), Value::String("string".to_string()));
+                schema.insert(TYPE_KEY.to_string(), Value::String(TYPE_STRING.to_string()));
                 Value::Object(schema)
             }
             Value::Array(arr) => {
                 let mut schema = Map::new();
-                schema.insert("type".to_string(), Value::String("array".to_string()));
+                schema.insert(TYPE_KEY.to_string(), Value::String(TYPE_ARRAY.to_string()));
 
                 if arr.is_empty() {
                     schema.insert(
-                        "items".to_string(),
+                        ITEMS_KEY.to_string(),
                         Value::Object({
                             let mut item_schema = Map::new();
                             item_schema
-                                .insert("type".to_string(), Value::String("null".to_string()));
+                                .insert(TYPE_KEY.to_string(), Value::String(TYPE_NULL.to_string()));
                             item_schema
                         }),
                     );
                 } else {
                     let item_schemas: Vec<Value> = arr.iter().map(Self::value_to_schema).collect();
 
+                    // TODO(claude): Optimize array homogeneity check for large arrays
                     if item_schemas.iter().all(|s| s == &item_schemas[0]) {
-                        schema.insert("items".to_string(), item_schemas[0].clone());
+                        schema.insert(ITEMS_KEY.to_string(), item_schemas[0].clone());
                     } else {
-                        schema.insert("items".to_string(), Value::Array(item_schemas));
+                        schema.insert(ITEMS_KEY.to_string(), Value::Array(item_schemas));
                     }
                 }
                 Value::Object(schema)
             }
             Value::Object(obj) => {
                 let mut schema = Map::new();
-                schema.insert("type".to_string(), Value::String("object".to_string()));
+                schema.insert(TYPE_KEY.to_string(), Value::String(TYPE_OBJECT.to_string()));
 
                 let mut properties = Map::new();
                 let mut required = Vec::new();
@@ -96,8 +114,8 @@ impl JsonSchema {
                     required.push(Value::String(key.clone()));
                 }
 
-                schema.insert("properties".to_string(), Value::Object(properties));
-                schema.insert("required".to_string(), Value::Array(required));
+                schema.insert(PROPERTIES_KEY.to_string(), Value::Object(properties));
+                schema.insert(REQUIRED_KEY.to_string(), Value::Array(required));
                 Value::Object(schema)
             }
         }
@@ -107,12 +125,20 @@ impl JsonSchema {
 #[derive(Debug)]
 pub enum JsonSchemaError {
     SerdeError(String),
+    UnsupportedType { type_name: String, reason: String },
+    SerializationFailed { context: String, source: String },
 }
 
 impl std::fmt::Display for JsonSchemaError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             JsonSchemaError::SerdeError(msg) => write!(f, "Serde error: {}", msg),
+            JsonSchemaError::UnsupportedType { type_name, reason } => {
+                write!(f, "Unsupported type '{}': {}", type_name, reason)
+            }
+            JsonSchemaError::SerializationFailed { context, source } => {
+                write!(f, "Serialization failed in {}: {}", context, source)
+            }
         }
     }
 }
@@ -142,26 +168,26 @@ impl SchemaGenerator {
 
     fn create_object_schema(properties: Map<String, Value>) -> Value {
         let mut schema = Map::new();
-        schema.insert("type".to_string(), Value::String("object".to_string()));
+        schema.insert(TYPE_KEY.to_string(), Value::String(TYPE_OBJECT.to_string()));
         let required: Vec<Value> = properties
             .keys()
             .map(|k| Value::String(k.clone()))
             .collect();
-        schema.insert("properties".to_string(), Value::Object(properties));
-        schema.insert("required".to_string(), Value::Array(required));
+        schema.insert(PROPERTIES_KEY.to_string(), Value::Object(properties));
+        schema.insert(REQUIRED_KEY.to_string(), Value::Array(required));
         Value::Object(schema)
     }
 
     fn create_array_schema(item_schema: Value) -> Value {
         let mut schema = Map::new();
-        schema.insert("type".to_string(), Value::String("array".to_string()));
-        schema.insert("items".to_string(), item_schema);
+        schema.insert(TYPE_KEY.to_string(), Value::String(TYPE_ARRAY.to_string()));
+        schema.insert(ITEMS_KEY.to_string(), item_schema);
         Value::Object(schema)
     }
 
     fn create_primitive_schema(type_name: &str) -> Value {
         let mut schema = Map::new();
-        schema.insert("type".to_string(), Value::String(type_name.to_string()));
+        schema.insert(TYPE_KEY.to_string(), Value::String(type_name.to_string()));
         Value::Object(schema)
     }
 }
@@ -179,92 +205,96 @@ impl<'a> Serializer for &'a mut SchemaGenerator {
     type SerializeStructVariant = StructVariantSchemaBuilder<'a>;
 
     fn serialize_bool(self, _v: bool) -> Result<Self::Ok, Self::Error> {
-        self.current_schema = SchemaGenerator::create_primitive_schema("boolean");
+        self.current_schema = SchemaGenerator::create_primitive_schema(TYPE_BOOLEAN);
         Ok(())
     }
 
+    // TODO(claude): Use macro to reduce duplication in integer serializers
     fn serialize_i8(self, _v: i8) -> Result<Self::Ok, Self::Error> {
-        self.current_schema = SchemaGenerator::create_primitive_schema("integer");
+        self.current_schema = SchemaGenerator::create_primitive_schema(TYPE_INTEGER);
         Ok(())
     }
 
     fn serialize_i16(self, _v: i16) -> Result<Self::Ok, Self::Error> {
-        self.current_schema = SchemaGenerator::create_primitive_schema("integer");
+        self.current_schema = SchemaGenerator::create_primitive_schema(TYPE_INTEGER);
         Ok(())
     }
 
     fn serialize_i32(self, _v: i32) -> Result<Self::Ok, Self::Error> {
-        self.current_schema = SchemaGenerator::create_primitive_schema("integer");
+        self.current_schema = SchemaGenerator::create_primitive_schema(TYPE_INTEGER);
         Ok(())
     }
 
     fn serialize_i64(self, _v: i64) -> Result<Self::Ok, Self::Error> {
-        self.current_schema = SchemaGenerator::create_primitive_schema("integer");
+        self.current_schema = SchemaGenerator::create_primitive_schema(TYPE_INTEGER);
         Ok(())
     }
 
     fn serialize_u8(self, _v: u8) -> Result<Self::Ok, Self::Error> {
-        self.current_schema = SchemaGenerator::create_primitive_schema("integer");
+        self.current_schema = SchemaGenerator::create_primitive_schema(TYPE_INTEGER);
         Ok(())
     }
 
     fn serialize_u16(self, _v: u16) -> Result<Self::Ok, Self::Error> {
-        self.current_schema = SchemaGenerator::create_primitive_schema("integer");
+        self.current_schema = SchemaGenerator::create_primitive_schema(TYPE_INTEGER);
         Ok(())
     }
 
     fn serialize_u32(self, _v: u32) -> Result<Self::Ok, Self::Error> {
-        self.current_schema = SchemaGenerator::create_primitive_schema("integer");
+        self.current_schema = SchemaGenerator::create_primitive_schema(TYPE_INTEGER);
         Ok(())
     }
 
     fn serialize_u64(self, _v: u64) -> Result<Self::Ok, Self::Error> {
-        self.current_schema = SchemaGenerator::create_primitive_schema("integer");
+        self.current_schema = SchemaGenerator::create_primitive_schema(TYPE_INTEGER);
         Ok(())
     }
 
     fn serialize_i128(self, _v: i128) -> Result<Self::Ok, Self::Error> {
-        Err(JsonSchemaError::SerdeError(
-            "i128 type is not supported for JSON schema generation".to_string(),
-        ))
+        Err(JsonSchemaError::UnsupportedType {
+            type_name: "i128".to_string(),
+            reason: "type is not supported for JSON schema generation".to_string(),
+        })
     }
 
     fn serialize_u128(self, _v: u128) -> Result<Self::Ok, Self::Error> {
-        Err(JsonSchemaError::SerdeError(
-            "u128 type is not supported for JSON schema generation".to_string(),
-        ))
+        Err(JsonSchemaError::UnsupportedType {
+            type_name: "u128".to_string(),
+            reason: "type is not supported for JSON schema generation".to_string(),
+        })
     }
 
     fn serialize_f32(self, _v: f32) -> Result<Self::Ok, Self::Error> {
-        self.current_schema = SchemaGenerator::create_primitive_schema("number");
+        self.current_schema = SchemaGenerator::create_primitive_schema(TYPE_NUMBER);
         Ok(())
     }
 
     fn serialize_f64(self, _v: f64) -> Result<Self::Ok, Self::Error> {
-        self.current_schema = SchemaGenerator::create_primitive_schema("number");
+        self.current_schema = SchemaGenerator::create_primitive_schema(TYPE_NUMBER);
         Ok(())
     }
 
     fn serialize_char(self, _v: char) -> Result<Self::Ok, Self::Error> {
-        self.current_schema = SchemaGenerator::create_primitive_schema("string");
+        self.current_schema = SchemaGenerator::create_primitive_schema(TYPE_STRING);
         Ok(())
     }
 
     fn serialize_str(self, _v: &str) -> Result<Self::Ok, Self::Error> {
-        self.current_schema = SchemaGenerator::create_primitive_schema("string");
+        self.current_schema = SchemaGenerator::create_primitive_schema(TYPE_STRING);
         Ok(())
     }
 
     fn serialize_bytes(self, _v: &[u8]) -> Result<Self::Ok, Self::Error> {
-        Err(JsonSchemaError::SerdeError(
-            "byte arrays are not supported for JSON schema generation".to_string(),
-        ))
+        Err(JsonSchemaError::UnsupportedType {
+            type_name: "&[u8]".to_string(),
+            reason: "byte arrays are not supported for JSON schema generation".to_string(),
+        })
     }
 
     fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
         self.current_schema = Value::Object({
             let mut schema = Map::new();
-            schema.insert("type".to_string(), Value::String("null".to_string()));
+            schema.insert(TYPE_KEY.to_string(), Value::String(TYPE_NULL.to_string()));
             schema
         });
         Ok(())
@@ -280,7 +310,7 @@ impl<'a> Serializer for &'a mut SchemaGenerator {
     fn serialize_unit(self) -> Result<Self::Ok, Self::Error> {
         self.current_schema = Value::Object({
             let mut schema = Map::new();
-            schema.insert("type".to_string(), Value::String("null".to_string()));
+            schema.insert(TYPE_KEY.to_string(), Value::String(TYPE_NULL.to_string()));
             schema
         });
         Ok(())
@@ -289,7 +319,7 @@ impl<'a> Serializer for &'a mut SchemaGenerator {
     fn serialize_unit_struct(self, _name: &'static str) -> Result<Self::Ok, Self::Error> {
         self.current_schema = Value::Object({
             let mut schema = Map::new();
-            schema.insert("type".to_string(), Value::String("null".to_string()));
+            schema.insert(TYPE_KEY.to_string(), Value::String(TYPE_NULL.to_string()));
             schema
         });
         Ok(())
@@ -302,9 +332,9 @@ impl<'a> Serializer for &'a mut SchemaGenerator {
         variant: &'static str,
     ) -> Result<Self::Ok, Self::Error> {
         let mut schema = Map::new();
-        schema.insert("type".to_string(), Value::String("string".to_string()));
+        schema.insert(TYPE_KEY.to_string(), Value::String(TYPE_STRING.to_string()));
         schema.insert(
-            "enum".to_string(),
+            ENUM_KEY.to_string(),
             Value::Array(vec![Value::String(variant.to_string())]),
         );
         self.current_schema = Value::Object(schema);
@@ -406,7 +436,7 @@ impl<'a> Serializer for &'a mut SchemaGenerator {
     }
 }
 
-pub struct SeqSchemaBuilder<'a> {
+struct SeqSchemaBuilder<'a> {
     generator: &'a mut SchemaGenerator,
     item_schema: Option<Value>,
 }
@@ -430,13 +460,13 @@ impl SerializeSeq for SeqSchemaBuilder<'_> {
     fn end(self) -> Result<Self::Ok, Self::Error> {
         let item_schema = self
             .item_schema
-            .unwrap_or_else(|| SchemaGenerator::create_primitive_schema("null"));
+            .unwrap_or_else(|| SchemaGenerator::create_primitive_schema(TYPE_NULL));
         self.generator.current_schema = SchemaGenerator::create_array_schema(item_schema);
         Ok(())
     }
 }
 
-pub struct TupleSchemaBuilder<'a> {
+struct TupleSchemaBuilder<'a> {
     generator: &'a mut SchemaGenerator,
     schemas: Vec<Value>,
 }
@@ -457,14 +487,14 @@ impl SerializeTuple for TupleSchemaBuilder<'_> {
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
         let mut schema = Map::new();
-        schema.insert("type".to_string(), Value::String("array".to_string()));
-        schema.insert("items".to_string(), Value::Array(self.schemas));
+        schema.insert(TYPE_KEY.to_string(), Value::String(TYPE_ARRAY.to_string()));
+        schema.insert(ITEMS_KEY.to_string(), Value::Array(self.schemas));
         self.generator.current_schema = Value::Object(schema);
         Ok(())
     }
 }
 
-pub struct TupleStructSchemaBuilder<'a> {
+struct TupleStructSchemaBuilder<'a> {
     generator: &'a mut SchemaGenerator,
     schemas: Vec<Value>,
 }
@@ -485,14 +515,14 @@ impl SerializeTupleStruct for TupleStructSchemaBuilder<'_> {
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
         let mut schema = Map::new();
-        schema.insert("type".to_string(), Value::String("array".to_string()));
-        schema.insert("items".to_string(), Value::Array(self.schemas));
+        schema.insert(TYPE_KEY.to_string(), Value::String(TYPE_ARRAY.to_string()));
+        schema.insert(ITEMS_KEY.to_string(), Value::Array(self.schemas));
         self.generator.current_schema = Value::Object(schema);
         Ok(())
     }
 }
 
-pub struct TupleVariantSchemaBuilder<'a> {
+struct TupleVariantSchemaBuilder<'a> {
     generator: &'a mut SchemaGenerator,
     schemas: Vec<Value>,
 }
@@ -513,14 +543,14 @@ impl SerializeTupleVariant for TupleVariantSchemaBuilder<'_> {
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
         let mut schema = Map::new();
-        schema.insert("type".to_string(), Value::String("array".to_string()));
-        schema.insert("items".to_string(), Value::Array(self.schemas));
+        schema.insert(TYPE_KEY.to_string(), Value::String(TYPE_ARRAY.to_string()));
+        schema.insert(ITEMS_KEY.to_string(), Value::Array(self.schemas));
         self.generator.current_schema = Value::Object(schema);
         Ok(())
     }
 }
 
-pub struct MapSchemaBuilder<'a> {
+struct MapSchemaBuilder<'a> {
     generator: &'a mut SchemaGenerator,
     properties: Map<String, Value>,
     current_key: Option<String>,
@@ -539,6 +569,7 @@ impl SerializeMap for MapSchemaBuilder<'_> {
         if let Value::String(key_str) = key_generator.into_schema() {
             self.current_key = Some(key_str);
         } else {
+            // TODO(claude): Improve non-string key handling - silent fallback loses information
             self.current_key = Some("key".to_string());
         }
         Ok(())
@@ -562,7 +593,7 @@ impl SerializeMap for MapSchemaBuilder<'_> {
     }
 }
 
-pub struct StructSchemaBuilder<'a> {
+struct StructSchemaBuilder<'a> {
     generator: &'a mut SchemaGenerator,
     properties: Map<String, Value>,
 }
@@ -588,7 +619,7 @@ impl SerializeStruct for StructSchemaBuilder<'_> {
     }
 }
 
-pub struct StructVariantSchemaBuilder<'a> {
+struct StructVariantSchemaBuilder<'a> {
     generator: &'a mut SchemaGenerator,
     properties: Map<String, Value>,
 }
@@ -614,6 +645,7 @@ impl SerializeStructVariant for StructVariantSchemaBuilder<'_> {
     }
 }
 
+// TODO(claude): Split tests into focused modules - current single test module is too large (1000+ lines)
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1631,10 +1663,11 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
-        assert!(matches!(error, JsonSchemaError::SerdeError(_)));
+        assert!(matches!(error, JsonSchemaError::UnsupportedType { .. }));
 
-        let JsonSchemaError::SerdeError(msg) = error;
-        assert!(msg.contains("i128 type is not supported"));
+        if let JsonSchemaError::UnsupportedType { type_name, .. } = error {
+            assert_eq!(type_name, "i128");
+        }
 
         println!("i128 type correctly fails with error");
     }
@@ -1645,10 +1678,11 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
-        assert!(matches!(error, JsonSchemaError::SerdeError(_)));
+        assert!(matches!(error, JsonSchemaError::UnsupportedType { .. }));
 
-        let JsonSchemaError::SerdeError(msg) = error;
-        assert!(msg.contains("u128 type is not supported"));
+        if let JsonSchemaError::UnsupportedType { type_name, .. } = error {
+            assert_eq!(type_name, "u128");
+        }
 
         println!("u128 type correctly fails with error");
     }
@@ -1677,10 +1711,11 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
-        assert!(matches!(error, JsonSchemaError::SerdeError(_)));
+        assert!(matches!(error, JsonSchemaError::UnsupportedType { .. }));
 
-        let JsonSchemaError::SerdeError(msg) = error;
-        assert!(msg.contains("byte arrays are not supported"));
+        if let JsonSchemaError::UnsupportedType { type_name, .. } = error {
+            assert_eq!(type_name, "&[u8]");
+        }
 
         println!("Bytes type correctly fails with error");
     }
@@ -1691,7 +1726,7 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
-        assert!(matches!(error, JsonSchemaError::SerdeError(_)));
+        assert!(matches!(error, JsonSchemaError::UnsupportedType { .. }));
 
         println!("Struct with unsupported field correctly fails");
     }
