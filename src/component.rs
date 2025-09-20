@@ -2,6 +2,8 @@ use axum::{
     extract::{Path, Query},
     http::StatusCode,
     response::Json,
+    routing::get,
+    Router,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -23,25 +25,25 @@ pub struct Component {
     pub data: serde_json::Value,
 }
 
-pub async fn get_component_definitions(
+async fn get_component_definitions(
     Query(_params): Query<HashMap<String, String>>,
 ) -> Result<Json<Vec<ComponentDefinition>>, StatusCode> {
     Ok(Json(vec![]))
 }
 
-pub async fn create_component_definition(
+async fn create_component_definition(
     Json(definition): Json<ComponentDefinition>,
 ) -> Result<Json<ComponentDefinition>, StatusCode> {
     Ok(Json(definition))
 }
 
-pub async fn update_component_definition(
+async fn update_component_definition(
     Json(definition): Json<ComponentDefinition>,
 ) -> Result<Json<ComponentDefinition>, StatusCode> {
     Ok(Json(definition))
 }
 
-pub async fn patch_component_definition(
+async fn patch_component_definition(
     Json(patch): Json<Value>,
 ) -> Result<Json<ComponentDefinition>, StatusCode> {
     let definition = ComponentDefinition {
@@ -53,11 +55,11 @@ pub async fn patch_component_definition(
     Ok(Json(definition))
 }
 
-pub async fn delete_component_definitions() -> Result<StatusCode, StatusCode> {
+async fn delete_component_definitions() -> Result<StatusCode, StatusCode> {
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn get_component_definition_by_id(
+async fn get_component_definition_by_id(
     Path(id): Path<String>,
 ) -> Result<Json<ComponentDefinition>, StatusCode> {
     let definition = ComponentDefinition {
@@ -69,7 +71,7 @@ pub async fn get_component_definition_by_id(
     Ok(Json(definition))
 }
 
-pub async fn update_component_definition_by_id(
+async fn update_component_definition_by_id(
     Path(id): Path<String>,
     Json(mut definition): Json<ComponentDefinition>,
 ) -> Result<Json<ComponentDefinition>, StatusCode> {
@@ -77,7 +79,7 @@ pub async fn update_component_definition_by_id(
     Ok(Json(definition))
 }
 
-pub async fn patch_component_definition_by_id(
+async fn patch_component_definition_by_id(
     Path(id): Path<String>,
     Json(patch): Json<Value>,
 ) -> Result<Json<ComponentDefinition>, StatusCode> {
@@ -90,31 +92,27 @@ pub async fn patch_component_definition_by_id(
     Ok(Json(definition))
 }
 
-pub async fn delete_component_definition_by_id(
+async fn delete_component_definition_by_id(
     Path(_id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn get_components(
+async fn get_components(
     Query(_params): Query<HashMap<String, String>>,
 ) -> Result<Json<Vec<Component>>, StatusCode> {
     Ok(Json(vec![]))
 }
 
-pub async fn create_component(
-    Json(component): Json<Component>,
-) -> Result<Json<Component>, StatusCode> {
+async fn create_component(Json(component): Json<Component>) -> Result<Json<Component>, StatusCode> {
     Ok(Json(component))
 }
 
-pub async fn update_component(
-    Json(component): Json<Component>,
-) -> Result<Json<Component>, StatusCode> {
+async fn update_component(Json(component): Json<Component>) -> Result<Json<Component>, StatusCode> {
     Ok(Json(component))
 }
 
-pub async fn patch_component(Json(patch): Json<Value>) -> Result<Json<Component>, StatusCode> {
+async fn patch_component(Json(patch): Json<Value>) -> Result<Json<Component>, StatusCode> {
     let component = Component {
         id: "patched".to_string(),
         definition_id: "def1".to_string(),
@@ -124,11 +122,11 @@ pub async fn patch_component(Json(patch): Json<Value>) -> Result<Json<Component>
     Ok(Json(component))
 }
 
-pub async fn delete_components() -> Result<StatusCode, StatusCode> {
+async fn delete_components() -> Result<StatusCode, StatusCode> {
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn get_component_by_id(Path(id): Path<String>) -> Result<Json<Component>, StatusCode> {
+async fn get_component_by_id(Path(id): Path<String>) -> Result<Json<Component>, StatusCode> {
     let component = Component {
         id: id.clone(),
         definition_id: "def1".to_string(),
@@ -138,7 +136,7 @@ pub async fn get_component_by_id(Path(id): Path<String>) -> Result<Json<Componen
     Ok(Json(component))
 }
 
-pub async fn update_component_by_id(
+async fn update_component_by_id(
     Path(id): Path<String>,
     Json(mut component): Json<Component>,
 ) -> Result<Json<Component>, StatusCode> {
@@ -146,7 +144,7 @@ pub async fn update_component_by_id(
     Ok(Json(component))
 }
 
-pub async fn patch_component_by_id(
+async fn patch_component_by_id(
     Path(id): Path<String>,
     Json(patch): Json<Value>,
 ) -> Result<Json<Component>, StatusCode> {
@@ -159,6 +157,40 @@ pub async fn patch_component_by_id(
     Ok(Json(component))
 }
 
-pub async fn delete_component_by_id(Path(_id): Path<String>) -> Result<StatusCode, StatusCode> {
+async fn delete_component_by_id(Path(_id): Path<String>) -> Result<StatusCode, StatusCode> {
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub fn create_component_router() -> Router {
+    Router::new()
+        .route(
+            "/componentdefinition",
+            get(get_component_definitions)
+                .post(create_component_definition)
+                .put(update_component_definition)
+                .patch(patch_component_definition)
+                .delete(delete_component_definitions),
+        )
+        .route(
+            "/componentdefinition/:id",
+            get(get_component_definition_by_id)
+                .put(update_component_definition_by_id)
+                .patch(patch_component_definition_by_id)
+                .delete(delete_component_definition_by_id),
+        )
+        .route(
+            "/component",
+            get(get_components)
+                .post(create_component)
+                .put(update_component)
+                .patch(patch_component)
+                .delete(delete_components),
+        )
+        .route(
+            "/component/:id",
+            get(get_component_by_id)
+                .put(update_component_by_id)
+                .patch(patch_component_by_id)
+                .delete(delete_component_by_id),
+        )
 }
