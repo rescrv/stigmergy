@@ -1,8 +1,10 @@
 mod component;
+mod entity;
 mod json_schema;
 mod validate;
 
 pub use component::{Component, ComponentDefinition, create_component_router};
+pub use entity::{Entity, EntityParseError, create_entity_router};
 pub use json_schema::JsonSchema;
 pub use validate::{ValidationError, validate_value};
 
