@@ -1,14 +1,18 @@
 use std::collections::HashMap;
 
 use axum::Router;
-use axum::extract::{Path, Query};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 use axum::routing::get;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 
-use crate::{ValidationError, validate_value};
+use crate::{
+    DurableLogger, LogEntry, LogMetadata, LogOperation, OperationStatus, ValidationError,
+    ValidationResult as LogValidationResult, validate_value,
+};
 
 ///////////////////////////////////////////// Component ////////////////////////////////////////////
 
@@ -66,6 +70,10 @@ pub struct ComponentDefinition {
 }
 
 impl ComponentDefinition {
+    pub fn new(component: Component, schema: Value) -> Self {
+        Self { component, schema }
+    }
+
     pub fn validate_schema(&self) -> Result<(), ValidationError> {
         validate_schema_structure(&self.schema)
     }
@@ -153,49 +161,125 @@ fn validate_schema_structure(schema: &Value) -> Result<(), ValidationError> {
 ////////////////////////////////////////////// routes //////////////////////////////////////////////
 
 async fn get_component_definitions(
+    State(logger): State<Arc<DurableLogger>>,
     Query(_params): Query<HashMap<String, String>>,
 ) -> Result<Json<Vec<ComponentDefinition>>, StatusCode> {
+    let log_entry = LogEntry::new(
+        LogOperation::ComponentDefinitionGet {
+            definition_id: None,
+            found: true,
+        },
+        LogMetadata::rest_api(None),
+    );
+    logger.log_or_error(&log_entry);
     Ok(Json(vec![]))
 }
 
 async fn create_component_definition(
+    State(logger): State<Arc<DurableLogger>>,
     Json(definition): Json<ComponentDefinition>,
 ) -> Result<Json<ComponentDefinition>, StatusCode> {
-    definition.validate_schema().map_err(|e| {
-        eprintln!("Invalid component definition schema: {}", e); // TODO(claude): cleanup this output
-        StatusCode::BAD_REQUEST
-    })?;
+    let validation_result = match definition.validate_schema() {
+        Ok(()) => LogValidationResult::success(),
+        Err(e) => {
+            let log_entry = LogEntry::new(
+                LogOperation::ComponentDefinitionCreate {
+                    definition: definition.clone(),
+                    validation_result: LogValidationResult::failed(e.to_string()),
+                },
+                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+            );
+            logger.log_or_error(&log_entry);
+            eprintln!("Invalid component definition schema: {}", e); // TODO(claude): cleanup this output
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    };
+
+    let log_entry = LogEntry::new(
+        LogOperation::ComponentDefinitionCreate {
+            definition: definition.clone(),
+            validation_result,
+        },
+        LogMetadata::rest_api(None),
+    );
+    logger.log_or_error(&log_entry);
 
     Ok(Json(definition))
 }
 
 async fn update_component_definition(
+    State(logger): State<Arc<DurableLogger>>,
     Json(definition): Json<ComponentDefinition>,
 ) -> Result<Json<ComponentDefinition>, StatusCode> {
-    definition.validate_schema().map_err(|e| {
-        eprintln!("Invalid component definition schema: {}", e); // TODO(claude): cleanup this output
-        StatusCode::BAD_REQUEST
-    })?;
+    let validation_result = match definition.validate_schema() {
+        Ok(()) => LogValidationResult::success(),
+        Err(e) => {
+            let log_entry = LogEntry::new(
+                LogOperation::ComponentDefinitionUpdate {
+                    definition_id: format!("{:?}", definition.component),
+                    old_definition: None,
+                    new_definition: definition.clone(),
+                    validation_result: LogValidationResult::failed(e.to_string()),
+                },
+                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+            );
+            logger.log_or_error(&log_entry);
+            eprintln!("Invalid component definition schema: {}", e); // TODO(claude): cleanup this output
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    };
+
+    let log_entry = LogEntry::new(
+        LogOperation::ComponentDefinitionUpdate {
+            definition_id: format!("{:?}", definition.component),
+            old_definition: None,
+            new_definition: definition.clone(),
+            validation_result,
+        },
+        LogMetadata::rest_api(None),
+    );
+    logger.log_or_error(&log_entry);
 
     Ok(Json(definition))
 }
 
 async fn patch_component_definition(
+    State(logger): State<Arc<DurableLogger>>,
     Json(patch): Json<Value>,
 ) -> Result<Json<ComponentDefinition>, StatusCode> {
     let component = Component::new("PatchedComponent").unwrap();
     let definition = ComponentDefinition {
         component,
-        schema: patch,
+        schema: patch.clone(),
     };
+
+    let log_entry = LogEntry::new(
+        LogOperation::ComponentDefinitionPatch {
+            definition_id: "PatchedComponent".to_string(),
+            patch_data: patch,
+            result_definition: definition.clone(),
+        },
+        LogMetadata::rest_api(None),
+    );
+    logger.log_or_error(&log_entry);
+
     Ok(Json(definition))
 }
 
-async fn delete_component_definitions() -> Result<StatusCode, StatusCode> {
+async fn delete_component_definitions(
+    State(logger): State<Arc<DurableLogger>>,
+) -> Result<StatusCode, StatusCode> {
+    let log_entry = LogEntry::new(
+        LogOperation::ComponentDefinitionDeleteAll { count_deleted: 0 },
+        LogMetadata::rest_api(None),
+    );
+    logger.log_or_error(&log_entry);
+
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn get_component_definition_by_id(
+    State(logger): State<Arc<DurableLogger>>,
     Path(id): Path<String>,
 ) -> Result<Json<ComponentDefinition>, StatusCode> {
     let component = Component::new(format!("Component{}", id))
@@ -204,22 +288,58 @@ async fn get_component_definition_by_id(
         component,
         schema: serde_json::json!({}),
     };
+
+    let log_entry = LogEntry::new(
+        LogOperation::ComponentDefinitionGet {
+            definition_id: Some(id),
+            found: true,
+        },
+        LogMetadata::rest_api(None),
+    );
+    logger.log_or_error(&log_entry);
+
     Ok(Json(definition))
 }
 
 async fn update_component_definition_by_id(
-    Path(_id): Path<String>,
+    State(logger): State<Arc<DurableLogger>>,
+    Path(id): Path<String>,
     Json(definition): Json<ComponentDefinition>,
 ) -> Result<Json<ComponentDefinition>, StatusCode> {
-    definition.validate_schema().map_err(|e| {
-        eprintln!("Invalid component definition schema: {}", e); // TODO(claude): cleanup this output
-        StatusCode::BAD_REQUEST
-    })?;
+    let validation_result = match definition.validate_schema() {
+        Ok(()) => LogValidationResult::success(),
+        Err(e) => {
+            let log_entry = LogEntry::new(
+                LogOperation::ComponentDefinitionUpdate {
+                    definition_id: id.clone(),
+                    old_definition: None,
+                    new_definition: definition.clone(),
+                    validation_result: LogValidationResult::failed(e.to_string()),
+                },
+                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+            );
+            logger.log_or_error(&log_entry);
+            eprintln!("Invalid component definition schema: {}", e); // TODO(claude): cleanup this output
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    };
+
+    let log_entry = LogEntry::new(
+        LogOperation::ComponentDefinitionUpdate {
+            definition_id: id,
+            old_definition: None,
+            new_definition: definition.clone(),
+            validation_result,
+        },
+        LogMetadata::rest_api(None),
+    );
+    logger.log_or_error(&log_entry);
 
     Ok(Json(definition))
 }
 
 async fn patch_component_definition_by_id(
+    State(logger): State<Arc<DurableLogger>>,
     Path(id): Path<String>,
     Json(patch): Json<Value>,
 ) -> Result<Json<ComponentDefinition>, StatusCode> {
@@ -227,24 +347,58 @@ async fn patch_component_definition_by_id(
         .unwrap_or_else(|| Component::new("PatchedComponent").unwrap());
     let definition = ComponentDefinition {
         component,
-        schema: patch,
+        schema: patch.clone(),
     };
+
+    let log_entry = LogEntry::new(
+        LogOperation::ComponentDefinitionPatch {
+            definition_id: id,
+            patch_data: patch,
+            result_definition: definition.clone(),
+        },
+        LogMetadata::rest_api(None),
+    );
+    logger.log_or_error(&log_entry);
+
     Ok(Json(definition))
 }
 
 async fn delete_component_definition_by_id(
-    Path(_id): Path<String>,
+    State(logger): State<Arc<DurableLogger>>,
+    Path(id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
+    let log_entry = LogEntry::new(
+        LogOperation::ComponentDefinitionDelete {
+            definition_id: id,
+            deleted_definition: None,
+        },
+        LogMetadata::rest_api(None),
+    );
+    logger.log_or_error(&log_entry);
+
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn get_components(
+    State(logger): State<Arc<DurableLogger>>,
     Query(_params): Query<HashMap<String, String>>,
 ) -> Result<Json<Vec<Value>>, StatusCode> {
+    let log_entry = LogEntry::new(
+        LogOperation::ComponentGet {
+            component_id: None,
+            found: true,
+        },
+        LogMetadata::rest_api(None),
+    );
+    logger.log_or_error(&log_entry);
+
     Ok(Json(vec![]))
 }
 
-async fn create_component(Json(component): Json<Value>) -> Result<Json<Value>, StatusCode> {
+async fn create_component(
+    State(logger): State<Arc<DurableLogger>>,
+    Json(component): Json<Value>,
+) -> Result<Json<Value>, StatusCode> {
     // TODO(user): Implement actual component definition lookup from data store integration
     // For demonstration, validate against a sample enum schema
     let sample_enum_schema = serde_json::json!({
@@ -263,59 +417,165 @@ async fn create_component(Json(component): Json<Value>) -> Result<Json<Value>, S
         ]
     });
 
-    validate_value(&component, &sample_enum_schema).map_err(|e| {
-        eprintln!("Component validation failed: {}", e); // TODO(claude): cleanup this output
-        StatusCode::BAD_REQUEST
-    })?;
+    let validation_result = match validate_value(&component, &sample_enum_schema) {
+        Ok(()) => Some(LogValidationResult::success()),
+        Err(e) => {
+            let log_entry = LogEntry::new(
+                LogOperation::ComponentCreate {
+                    component_id: "generated_id".to_string(),
+                    component_data: component.clone(),
+                    validation_result: Some(LogValidationResult::failed(e.to_string())),
+                },
+                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+            );
+            logger.log_or_error(&log_entry);
+            eprintln!("Component validation failed: {}", e); // TODO(claude): cleanup this output
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    };
+
+    let log_entry = LogEntry::new(
+        LogOperation::ComponentCreate {
+            component_id: "generated_id".to_string(),
+            component_data: component.clone(),
+            validation_result,
+        },
+        LogMetadata::rest_api(None),
+    );
+    logger.log_or_error(&log_entry);
 
     Ok(Json(component))
 }
 
-async fn update_component(Json(component): Json<Value>) -> Result<Json<Value>, StatusCode> {
+async fn update_component(
+    State(logger): State<Arc<DurableLogger>>,
+    Json(component): Json<Value>,
+) -> Result<Json<Value>, StatusCode> {
+    let log_entry = LogEntry::new(
+        LogOperation::ComponentUpdate {
+            component_id: "updated_id".to_string(),
+            old_data: None,
+            new_data: component.clone(),
+            validation_result: None,
+        },
+        LogMetadata::rest_api(None),
+    );
+    logger.log_or_error(&log_entry);
+
     Ok(Json(component))
 }
 
-async fn patch_component(Json(patch): Json<Value>) -> Result<Json<Value>, StatusCode> {
+async fn patch_component(
+    State(logger): State<Arc<DurableLogger>>,
+    Json(patch): Json<Value>,
+) -> Result<Json<Value>, StatusCode> {
+    let log_entry = LogEntry::new(
+        LogOperation::ComponentPatch {
+            component_id: "patched_id".to_string(),
+            patch_data: patch.clone(),
+            result_data: patch.clone(),
+        },
+        LogMetadata::rest_api(None),
+    );
+    logger.log_or_error(&log_entry);
+
     Ok(Json(patch))
 }
 
-async fn delete_components() -> Result<StatusCode, StatusCode> {
+async fn delete_components(
+    State(logger): State<Arc<DurableLogger>>,
+) -> Result<StatusCode, StatusCode> {
+    let log_entry = LogEntry::new(
+        LogOperation::ComponentDeleteAll { count_deleted: 0 },
+        LogMetadata::rest_api(None),
+    );
+    logger.log_or_error(&log_entry);
+
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn get_component_by_id(Path(id): Path<String>) -> Result<Json<Value>, StatusCode> {
+async fn get_component_by_id(
+    State(logger): State<Arc<DurableLogger>>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
     let component = serde_json::json!({
-        "id": id,
+        "id": id.clone(),
         "data": {}
     });
+
+    let log_entry = LogEntry::new(
+        LogOperation::ComponentGet {
+            component_id: Some(id),
+            found: true,
+        },
+        LogMetadata::rest_api(None),
+    );
+    logger.log_or_error(&log_entry);
+
     Ok(Json(component))
 }
 
 async fn update_component_by_id(
-    Path(_id): Path<String>,
+    State(logger): State<Arc<DurableLogger>>,
+    Path(id): Path<String>,
     Json(component): Json<Value>,
 ) -> Result<Json<Value>, StatusCode> {
+    let log_entry = LogEntry::new(
+        LogOperation::ComponentUpdate {
+            component_id: id,
+            old_data: None,
+            new_data: component.clone(),
+            validation_result: None,
+        },
+        LogMetadata::rest_api(None),
+    );
+    logger.log_or_error(&log_entry);
+
     Ok(Json(component))
 }
 
 async fn patch_component_by_id(
+    State(logger): State<Arc<DurableLogger>>,
     Path(id): Path<String>,
     Json(patch): Json<Value>,
 ) -> Result<Json<Value>, StatusCode> {
-    let mut component = patch;
+    let mut component = patch.clone();
     if let Some(obj) = component.as_object_mut() {
-        obj.insert("id".to_string(), serde_json::Value::String(id));
+        obj.insert("id".to_string(), serde_json::Value::String(id.clone()));
     }
+
+    let log_entry = LogEntry::new(
+        LogOperation::ComponentPatch {
+            component_id: id,
+            patch_data: patch,
+            result_data: component.clone(),
+        },
+        LogMetadata::rest_api(None),
+    );
+    logger.log_or_error(&log_entry);
+
     Ok(Json(component))
 }
 
-async fn delete_component_by_id(Path(_id): Path<String>) -> Result<StatusCode, StatusCode> {
+async fn delete_component_by_id(
+    State(logger): State<Arc<DurableLogger>>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, StatusCode> {
+    let log_entry = LogEntry::new(
+        LogOperation::ComponentDelete {
+            component_id: id,
+            deleted_data: None,
+        },
+        LogMetadata::rest_api(None),
+    );
+    logger.log_or_error(&log_entry);
+
     Ok(StatusCode::NO_CONTENT)
 }
 
 ////////////////////////////////////////////// router //////////////////////////////////////////////
 
-pub fn create_component_router() -> Router {
+pub fn create_component_router(logger: Arc<DurableLogger>) -> Router {
     Router::new()
         .route(
             "/componentdefinition",
@@ -347,6 +607,7 @@ pub fn create_component_router() -> Router {
                 .patch(patch_component_by_id)
                 .delete(delete_component_by_id),
         )
+        .with_state(logger)
 }
 
 #[cfg(test)]

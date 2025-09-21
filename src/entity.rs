@@ -16,11 +16,14 @@ const BASE64_ENCODED_LEN: usize = 43;
 const MAX_GENERATION_RETRIES: usize = 1000;
 
 use axum::Router;
-use axum::extract::Path;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 use axum::routing::{delete, post};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+use crate::{DurableLogger, LogEntry, LogMetadata, LogOperation, OperationStatus};
 
 /////////////////////////////////////////////// Entity ////////////////////////////////////////////////
 
@@ -377,17 +380,33 @@ pub struct CreateEntityResponse {
 /// # Errors
 /// Returns `StatusCode::INTERNAL_SERVER_ERROR` if random number generation fails.
 async fn create_entity(
+    State(logger): State<Arc<DurableLogger>>,
     Json(request): Json<CreateEntityRequest>,
 ) -> Result<Json<CreateEntityResponse>, StatusCode> {
+    let was_random = request.entity.is_none();
     let entity = match request.entity {
         Some(entity) => entity,
         None => {
             Entity::random_url_safe().map_err(|e| {
+                let log_entry = LogEntry::new(
+                    LogOperation::EntityCreate {
+                        entity: Entity::new([0u8; 32]),
+                        was_random,
+                    },
+                    LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+                );
+                logger.log_or_error(&log_entry);
                 eprintln!("Failed to generate random entity: {}", e); // TODO(claude): cleanup this output
                 StatusCode::INTERNAL_SERVER_ERROR
             })?
         }
     };
+
+    let log_entry = LogEntry::new(
+        LogOperation::EntityCreate { entity, was_random },
+        LogMetadata::rest_api(None),
+    );
+    logger.log_or_error(&log_entry);
 
     let response = CreateEntityResponse {
         entity,
@@ -409,7 +428,10 @@ async fn create_entity(
 /// # Note
 /// Currently this is a mock implementation that only validates the entity format
 /// but doesn't perform actual deletion from a data store.
-async fn delete_entity(Path(entity_base64): Path<String>) -> Result<StatusCode, StatusCode> {
+async fn delete_entity(
+    State(logger): State<Arc<DurableLogger>>,
+    Path(entity_base64): Path<String>,
+) -> Result<StatusCode, StatusCode> {
     // Construct full entity string from base64 part
     let entity_string = format!("{}{}", ENTITY_PREFIX, entity_base64);
 
@@ -418,10 +440,26 @@ async fn delete_entity(Path(entity_base64): Path<String>) -> Result<StatusCode, 
         Ok(_entity) => {
             // Entity exists and was deleted successfully
             // TODO(user): Implement actual deletion logic with proper data store integration
+            let log_entry = LogEntry::new(
+                LogOperation::EntityDelete {
+                    entity_id: entity_string,
+                    success: true,
+                },
+                LogMetadata::rest_api(None),
+            );
+            logger.log_or_error(&log_entry);
             Ok(StatusCode::NO_CONTENT)
         }
         Err(parse_error) => {
             // Invalid entity ID format - log the specific error for debugging
+            let log_entry = LogEntry::new(
+                LogOperation::EntityDelete {
+                    entity_id: entity_string,
+                    success: false,
+                },
+                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+            );
+            logger.log_or_error(&log_entry);
             eprintln!("Invalid entity ID '{}': {}", entity_base64, parse_error); // TODO(claude): cleanup this output
             Err(StatusCode::BAD_REQUEST)
         }
@@ -432,27 +470,47 @@ async fn delete_entity(Path(entity_base64): Path<String>) -> Result<StatusCode, 
 
 /// Creates an Axum router with entity management endpoints.
 ///
+/// # Arguments
+/// * `logger` - The durable logger instance to use for logging operations
+///
 /// # Routes
 /// - `POST /entity` - Create a new entity (optionally random)
 /// - `DELETE /entity/{entity_id}` - Delete an entity by ID
 ///
 /// # Returns
-/// An Axum `Router` configured with the entity endpoints.
+/// An Axum `Router` configured with the entity endpoints and logging state.
 ///
 /// # Examples
 /// ```
-/// # use stigmergy::create_entity_router;
-/// let router = create_entity_router();
+/// # use stigmergy::{create_entity_router, DurableLogger};
+/// # use std::sync::Arc;
+/// # use std::path::PathBuf;
+/// let logger = Arc::new(DurableLogger::new(PathBuf::from("test.jsonl")));
+/// let router = create_entity_router(logger);
 /// ```
-pub fn create_entity_router() -> Router {
+pub fn create_entity_router(logger: Arc<DurableLogger>) -> Router {
     Router::new()
         .route("/entity", post(create_entity))
         .route("/entity/:entity_id", delete(delete_entity))
+        .with_state(logger)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::extract::State;
+
+    fn test_logger() -> Arc<DurableLogger> {
+        use std::path::PathBuf;
+        use std::process;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let test_path = format!("test_entity_{}_{}.jsonl", process::id(), timestamp);
+        Arc::new(DurableLogger::new(PathBuf::from(test_path)))
+    }
 
     #[test]
     fn entity_new_and_accessors() {
@@ -614,7 +672,8 @@ mod tests {
             entity: Some(test_entity),
         };
 
-        let response = create_entity(Json(request)).await.unwrap();
+        let logger = test_logger();
+        let response = create_entity(State(logger), Json(request)).await.unwrap();
 
         assert_eq!(response.0.entity, test_entity);
         assert!(response.0.created);
@@ -624,7 +683,8 @@ mod tests {
     async fn create_entity_generates_random_when_none() {
         let request = CreateEntityRequest { entity: None };
 
-        let response = create_entity(Json(request)).await;
+        let logger = test_logger();
+        let response = create_entity(State(logger), Json(request)).await;
 
         // Must succeed - if /dev/urandom is not available, fail the test
         let response =
@@ -640,7 +700,8 @@ mod tests {
         for _ in 0..1000 {
             let request = CreateEntityRequest { entity: None };
 
-            let response = create_entity(Json(request)).await;
+            let logger = test_logger();
+            let response = create_entity(State(logger), Json(request)).await;
 
             // Must succeed - if /dev/urandom is not available, fail the test
             let response =
@@ -680,7 +741,8 @@ mod tests {
         // Extract just the base64 part after "entity:"
         let base64_part = entity_str.strip_prefix(ENTITY_PREFIX).unwrap();
 
-        let result = delete_entity(Path(base64_part.to_string())).await;
+        let logger = test_logger();
+        let result = delete_entity(State(logger), Path(base64_part.to_string())).await;
 
         assert_eq!(result, Ok(StatusCode::NO_CONTENT));
     }
@@ -689,7 +751,8 @@ mod tests {
     async fn delete_entity_invalid_id() {
         let invalid_base64 = "invalid_entity_id".to_string();
 
-        let result = delete_entity(Path(invalid_base64)).await;
+        let logger = test_logger();
+        let result = delete_entity(State(logger), Path(invalid_base64)).await;
 
         assert_eq!(result, Err(StatusCode::BAD_REQUEST));
     }

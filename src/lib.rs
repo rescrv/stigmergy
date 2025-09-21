@@ -1,11 +1,16 @@
 mod component;
 mod entity;
 mod json_schema;
+mod log_entry;
 mod validate;
 
 pub use component::{Component, ComponentDefinition, create_component_router};
 pub use entity::{Entity, EntityParseError, create_entity_router};
 pub use json_schema::JsonSchema;
+pub use log_entry::{
+    DurableLogger, LogEntry, LogMetadata, LogOperation, OperationStatus, ValidationResult,
+    ValidationType,
+};
 pub use validate::{ValidationError, validate_value};
 
 ///////////////////////////////////////// generate_id_serde ////////////////////////////////////////
