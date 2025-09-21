@@ -8,6 +8,8 @@ use axum::routing::get;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::{ValidationError, validate_value};
+
 ///////////////////////////////////////////// Component ////////////////////////////////////////////
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +65,91 @@ pub struct ComponentDefinition {
     pub schema: serde_json::Value,
 }
 
+impl ComponentDefinition {
+    pub fn validate_schema(&self) -> Result<(), ValidationError> {
+        validate_schema_structure(&self.schema)
+    }
+
+    pub fn validate_component_data(&self, data: &Value) -> Result<(), ValidationError> {
+        validate_value(data, &self.schema)
+    }
+}
+
+fn validate_schema_structure(schema: &Value) -> Result<(), ValidationError> {
+    if !schema.is_object() {
+        return Err(ValidationError::InvalidSchema(
+            "Schema must be an object".to_string(),
+        ));
+    }
+
+    let schema_obj = schema.as_object().unwrap();
+
+    if let Some(one_of) = schema_obj.get("oneOf") {
+        if !one_of.is_array() {
+            return Err(ValidationError::InvalidSchema(
+                "oneOf must be an array".to_string(),
+            ));
+        }
+
+        for (i, sub_schema) in one_of.as_array().unwrap().iter().enumerate() {
+            validate_schema_structure(sub_schema).map_err(|e| {
+                ValidationError::InvalidSchema(format!(
+                    "Invalid oneOf schema at index {}: {}",
+                    i, e
+                ))
+            })?;
+        }
+        return Ok(());
+    }
+
+    if let Some(schema_type) = schema_obj.get("type") {
+        if !schema_type.is_string() {
+            return Err(ValidationError::InvalidSchema(
+                "Schema type must be a string".to_string(),
+            ));
+        }
+
+        let type_str = schema_type.as_str().unwrap();
+        match type_str {
+            "null" | "boolean" | "integer" | "number" | "string" => Ok(()),
+            "array" => {
+                if let Some(items) = schema_obj.get("items") {
+                    validate_schema_structure(items)
+                } else {
+                    Ok(())
+                }
+            }
+            "object" => {
+                if let Some(properties) = schema_obj.get("properties") {
+                    if !properties.is_object() {
+                        return Err(ValidationError::InvalidSchema(
+                            "Properties must be an object".to_string(),
+                        ));
+                    }
+
+                    for (prop_name, prop_schema) in properties.as_object().unwrap() {
+                        validate_schema_structure(prop_schema).map_err(|e| {
+                            ValidationError::InvalidSchema(format!(
+                                "Invalid property schema '{}': {}",
+                                prop_name, e
+                            ))
+                        })?;
+                    }
+                }
+                Ok(())
+            }
+            _ => Err(ValidationError::InvalidSchema(format!(
+                "Unknown schema type: {}",
+                type_str
+            ))),
+        }
+    } else {
+        Err(ValidationError::InvalidSchema(
+            "Schema must have either 'type' or 'oneOf'".to_string(),
+        ))
+    }
+}
+
 ////////////////////////////////////////////// routes //////////////////////////////////////////////
 
 async fn get_component_definitions(
@@ -74,12 +161,22 @@ async fn get_component_definitions(
 async fn create_component_definition(
     Json(definition): Json<ComponentDefinition>,
 ) -> Result<Json<ComponentDefinition>, StatusCode> {
+    definition.validate_schema().map_err(|e| {
+        eprintln!("Invalid component definition schema: {}", e); // TODO(claude): cleanup this output
+        StatusCode::BAD_REQUEST
+    })?;
+
     Ok(Json(definition))
 }
 
 async fn update_component_definition(
     Json(definition): Json<ComponentDefinition>,
 ) -> Result<Json<ComponentDefinition>, StatusCode> {
+    definition.validate_schema().map_err(|e| {
+        eprintln!("Invalid component definition schema: {}", e); // TODO(claude): cleanup this output
+        StatusCode::BAD_REQUEST
+    })?;
+
     Ok(Json(definition))
 }
 
@@ -114,6 +211,11 @@ async fn update_component_definition_by_id(
     Path(_id): Path<String>,
     Json(definition): Json<ComponentDefinition>,
 ) -> Result<Json<ComponentDefinition>, StatusCode> {
+    definition.validate_schema().map_err(|e| {
+        eprintln!("Invalid component definition schema: {}", e); // TODO(claude): cleanup this output
+        StatusCode::BAD_REQUEST
+    })?;
+
     Ok(Json(definition))
 }
 
@@ -143,6 +245,29 @@ async fn get_components(
 }
 
 async fn create_component(Json(component): Json<Value>) -> Result<Json<Value>, StatusCode> {
+    // TODO(user): Implement actual component definition lookup from data store integration
+    // For demonstration, validate against a sample enum schema
+    let sample_enum_schema = serde_json::json!({
+        "oneOf": [
+            {
+                "type": "string",
+                "enum": ["Red", "Green", "Blue"]
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "Custom": { "type": "string" }
+                },
+                "required": ["Custom"]
+            }
+        ]
+    });
+
+    validate_value(&component, &sample_enum_schema).map_err(|e| {
+        eprintln!("Component validation failed: {}", e); // TODO(claude): cleanup this output
+        StatusCode::BAD_REQUEST
+    })?;
+
     Ok(Json(component))
 }
 
@@ -284,5 +409,157 @@ mod tests {
         assert!(Component::new("::").is_none());
         assert!(Component::new("foo::").is_none());
         assert!(Component::new("123::foo").is_none());
+    }
+
+    #[test]
+    fn component_definition_validate_simple_schema() {
+        let definition = ComponentDefinition {
+            component: Component::new("TestComponent").unwrap(),
+            schema: serde_json::json!({
+                "type": "string"
+            }),
+        };
+
+        assert!(definition.validate_schema().is_ok());
+    }
+
+    #[test]
+    fn component_definition_validate_enum_schema() {
+        let definition = ComponentDefinition {
+            component: Component::new("ColorComponent").unwrap(),
+            schema: serde_json::json!({
+                "oneOf": [
+                    {
+                        "type": "string",
+                        "enum": ["Red", "Green", "Blue"]
+                    },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "Custom": { "type": "string" }
+                        },
+                        "required": ["Custom"]
+                    }
+                ]
+            }),
+        };
+
+        assert!(definition.validate_schema().is_ok());
+    }
+
+    #[test]
+    fn component_definition_validate_invalid_schema() {
+        let definition = ComponentDefinition {
+            component: Component::new("InvalidComponent").unwrap(),
+            schema: serde_json::json!({
+                "type": "invalid_type"
+            }),
+        };
+
+        assert!(definition.validate_schema().is_err());
+    }
+
+    #[test]
+    fn component_definition_validate_component_data() {
+        let definition = ComponentDefinition {
+            component: Component::new("ColorComponent").unwrap(),
+            schema: serde_json::json!({
+                "oneOf": [
+                    {
+                        "type": "string",
+                        "enum": ["Red", "Green", "Blue"]
+                    },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "Custom": { "type": "string" }
+                        },
+                        "required": ["Custom"]
+                    }
+                ]
+            }),
+        };
+
+        assert!(
+            definition
+                .validate_component_data(&serde_json::json!("Red"))
+                .is_ok()
+        );
+        assert!(
+            definition
+                .validate_component_data(&serde_json::json!({"Custom": "purple"}))
+                .is_ok()
+        );
+        assert!(
+            definition
+                .validate_component_data(&serde_json::json!("Yellow"))
+                .is_err()
+        );
+        assert!(
+            definition
+                .validate_component_data(&serde_json::json!(42))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn component_definition_validate_tagged_union_data() {
+        let definition = ComponentDefinition {
+            component: Component::new("ShapeComponent").unwrap(),
+            schema: serde_json::json!({
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "Circle": {
+                                "type": "object",
+                                "properties": {
+                                    "radius": { "type": "number" }
+                                },
+                                "required": ["radius"]
+                            }
+                        },
+                        "required": ["Circle"]
+                    },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "Rectangle": {
+                                "type": "object",
+                                "properties": {
+                                    "width": { "type": "number" },
+                                    "height": { "type": "number" }
+                                },
+                                "required": ["width", "height"]
+                            }
+                        },
+                        "required": ["Rectangle"]
+                    }
+                ]
+            }),
+        };
+
+        assert!(
+            definition
+                .validate_component_data(&serde_json::json!({"Circle": {"radius": 5.0}}))
+                .is_ok()
+        );
+        assert!(
+            definition
+                .validate_component_data(
+                    &serde_json::json!({"Rectangle": {"width": 10.0, "height": 20.0}})
+                )
+                .is_ok()
+        );
+        assert!(
+            definition
+                .validate_component_data(&serde_json::json!({"Circle": {"radius": "invalid"}}))
+                .is_err()
+        );
+        assert!(
+            definition
+                .validate_component_data(&serde_json::json!({"Triangle": {"side": 5.0}}))
+                .is_err()
+        );
     }
 }

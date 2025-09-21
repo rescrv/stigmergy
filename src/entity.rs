@@ -3,6 +3,18 @@ use std::fs::File;
 use std::io::Read;
 use std::str::FromStr;
 
+////////////////////////////////////////////// Constants ///////////////////////////////////////////////
+
+/// Length of the entity prefix "entity:"
+const ENTITY_PREFIX: &str = "entity:";
+const ENTITY_PREFIX_LEN: usize = 7;
+
+/// Expected length of base64 encoded 32 bytes (without padding)
+const BASE64_ENCODED_LEN: usize = 43;
+
+/// Maximum number of retries when generating entities without special characters
+const MAX_GENERATION_RETRIES: usize = 1000;
+
 use axum::Router;
 use axum::extract::Path;
 use axum::http::StatusCode;
@@ -12,27 +24,145 @@ use serde::{Deserialize, Serialize};
 
 /////////////////////////////////////////////// Entity ////////////////////////////////////////////////
 
+/// A 32-byte entity identifier with URL-safe base64 string representation.
+///
+/// Entities are displayed as "entity:{base64}" where the base64 encoding uses URL-safe
+/// characters (- and _ instead of + and /) and no padding. This format is suitable for
+/// use in URLs and other contexts where standard base64 characters might cause issues.
+///
+/// # Examples
+///
+/// ```
+/// # use stigmergy::Entity;
+/// let entity = Entity::new([1u8; 32]);
+/// let entity_string = entity.to_string();
+/// assert!(entity_string.starts_with("entity:"));
+///
+/// // Parse from string
+/// let parsed: Entity = entity_string.parse().unwrap();
+/// assert_eq!(entity, parsed);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Entity([u8; 32]);
 
 impl Entity {
+    /// Creates a new Entity from a 32-byte array.
+    ///
+    /// # Arguments
+    /// * `bytes` - A 32-byte array representing the entity identifier
+    ///
+    /// # Examples
+    /// ```
+    /// # use stigmergy::Entity;
+    /// let entity = Entity::new([0u8; 32]);
+    /// ```
     pub fn new(bytes: [u8; 32]) -> Self {
         Entity(bytes)
     }
 
+    /// Returns a reference to the underlying 32-byte array.
+    ///
+    /// # Examples
+    /// ```
+    /// # use stigmergy::Entity;
+    /// let entity = Entity::new([1u8; 32]);
+    /// assert_eq!(entity.as_bytes(), &[1u8; 32]);
+    /// ```
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 
+    /// Consumes the Entity and returns the underlying 32-byte array.
+    ///
+    /// # Examples
+    /// ```
+    /// # use stigmergy::Entity;
+    /// let entity = Entity::new([1u8; 32]);
+    /// let bytes = entity.into_bytes();
+    /// assert_eq!(bytes, [1u8; 32]);
+    /// ```
     pub fn into_bytes(self) -> [u8; 32] {
         self.0
+    }
+
+    /// Generates a random Entity using `/dev/urandom`.
+    ///
+    /// # Returns
+    /// * `Ok(Entity)` - A randomly generated entity on success
+    /// * `Err(std::io::Error)` - An error if random number generation fails
+    ///
+    /// # Examples
+    /// ```no_run
+    /// # use stigmergy::Entity;
+    /// let entity = Entity::random().unwrap();
+    /// ```
+    pub fn random() -> std::io::Result<Self> {
+        let mut random_bytes = [0u8; 32];
+        let mut file = File::open("/dev/urandom")?;
+        file.read_exact(&mut random_bytes)?;
+        Ok(Entity::new(random_bytes))
+    }
+
+    /// Generates a random Entity that avoids URL-unsafe characters in its base64 representation.
+    ///
+    /// This method generates random entities until it finds one whose base64 encoding
+    /// doesn't contain `-` or `_` characters. After MAX_GENERATION_RETRIES attempts,
+    /// it will accept any entity and replace `-` with `9` and `_` with `6` to ensure
+    /// URL-safe output.
+    ///
+    /// # Returns
+    /// * `Ok(Entity)` - A randomly generated entity without URL-unsafe characters
+    /// * `Err(std::io::Error)` - An error if random number generation fails
+    ///
+    /// # Examples
+    /// ```no_run
+    /// # use stigmergy::Entity;
+    /// let entity = Entity::random_url_safe().unwrap();
+    /// let entity_string = entity.to_string();
+    /// let base64_part = &entity_string[7..]; // Skip "entity:"
+    /// assert!(!base64_part.contains('-') && !base64_part.contains('_'));
+    /// ```
+    pub fn random_url_safe() -> std::io::Result<Self> {
+        let mut attempts = 0;
+
+        loop {
+            attempts += 1;
+
+            let entity = Self::random()?;
+            let entity_string = entity.to_string();
+
+            if attempts > MAX_GENERATION_RETRIES {
+                // Fallback: accept any valid entity after max retries and clean it up
+                let cleaned_entity_string = entity_string.replace('-', "9").replace('_', "6");
+                return Ok(cleaned_entity_string.parse().unwrap());
+            }
+
+            // Check if the base64 part contains - or _
+            let base64_part = &entity_string[ENTITY_PREFIX_LEN..];
+            if !base64_part.contains('-') && !base64_part.contains('_') {
+                return Ok(entity);
+            }
+            // If it contains - or _, continue the loop to generate a new one
+        }
     }
 }
 
 ////////////////////////////////////// URL-Safe Base64 Encoding //////////////////////////////////////
 
+/// URL-safe base64 character set (RFC 4648 Section 5)
+/// Uses - and _ instead of + and / to be safe in URLs
 const BASE64_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
+/// Encodes bytes to URL-safe base64 without padding.
+///
+/// This implementation uses the URL-safe alphabet (RFC 4648 Section 5) and
+/// omits padding characters for a cleaner representation.
+///
+/// # Arguments
+/// * `input` - The bytes to encode
+///
+/// # Returns
+/// A URL-safe base64 encoded string without padding
 fn encode_base64_url_safe(input: &[u8]) -> String {
     let mut result = String::new();
     let mut i = 0;
@@ -66,6 +196,17 @@ fn encode_base64_url_safe(input: &[u8]) -> String {
     result
 }
 
+/// Decodes a URL-safe base64 string, handling missing padding automatically.
+///
+/// # Arguments
+/// * `input` - The base64 string to decode
+///
+/// # Returns
+/// * `Ok(Vec<u8>)` - The decoded bytes on success
+/// * `Err(&'static str)` - An error message on failure
+///
+/// # Errors
+/// Returns an error if the input contains invalid base64 characters.
 fn decode_base64_url_safe(input: &str) -> Result<Vec<u8>, &'static str> {
     let mut chars: Vec<char> = input.chars().collect();
 
@@ -112,6 +253,14 @@ fn decode_base64_url_safe(input: &str) -> Result<Vec<u8>, &'static str> {
     Ok(result)
 }
 
+/// Converts a single character to its base64 value.
+///
+/// # Arguments
+/// * `c` - The character to convert
+///
+/// # Returns
+/// * `Ok(u32)` - The base64 value (0-63) on success
+/// * `Err(&'static str)` - An error message for invalid characters
 fn char_to_base64_value(c: char) -> Result<u32, &'static str> {
     match c {
         'A'..='Z' => Ok((c as u32) - ('A' as u32)),
@@ -129,10 +278,11 @@ fn char_to_base64_value(c: char) -> Result<u32, &'static str> {
 impl Display for Entity {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         let encoded = encode_base64_url_safe(&self.0);
-        write!(f, "entity:{}", encoded)
+        write!(f, "{}{}", ENTITY_PREFIX, encoded)
     }
 }
 
+/// Errors that can occur when parsing an Entity from a string.
 #[derive(Debug, PartialEq, Eq)]
 pub enum EntityParseError {
     InvalidPrefix,
@@ -154,96 +304,33 @@ impl Display for EntityParseError {
 
 impl std::error::Error for EntityParseError {}
 
-////////////////////////////////////////////// Routes //////////////////////////////////////////////////
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CreateEntityRequest {
-    pub entity: Option<Entity>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CreateEntityResponse {
-    pub entity: Entity,
-    pub created: bool,
-}
-
-async fn create_entity(
-    Json(request): Json<CreateEntityRequest>,
-) -> Result<Json<CreateEntityResponse>, StatusCode> {
-    let entity = match request.entity {
-        Some(entity) => entity,
-        None => {
-            // Generate a random entity if none provided, avoiding - and _ characters
-            loop {
-                let mut random_bytes = [0u8; 32];
-                match File::open("/dev/urandom") {
-                    Ok(mut file) => {
-                        if file.read_exact(&mut random_bytes).is_err() {
-                            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-                        }
-                    }
-                    Err(_) => {
-                        return Err(StatusCode::INTERNAL_SERVER_ERROR);
-                    }
-                }
-
-                let entity = Entity::new(random_bytes);
-                let entity_string = entity.to_string();
-
-                // Check if the base64 part contains - or _
-                let base64_part = &entity_string[7..]; // Skip "entity:"
-                if !base64_part.contains('-') && !base64_part.contains('_') {
-                    break entity;
-                }
-                // If it contains - or _, continue the loop to generate a new one
-            }
-        }
-    };
-
-    let response = CreateEntityResponse {
-        entity,
-        created: true,
-    };
-
-    Ok(Json(response))
-}
-
-async fn delete_entity(Path(entity_base64): Path<String>) -> Result<StatusCode, StatusCode> {
-    // Construct full entity string from base64 part
-    let entity_string = format!("entity:{}", entity_base64);
-
-    // Parse the entity ID
-    match Entity::from_str(&entity_string) {
-        Ok(_entity) => {
-            // Entity exists and was deleted successfully
-            Ok(StatusCode::NO_CONTENT)
-        }
-        Err(_) => {
-            // Invalid entity ID format
-            Err(StatusCode::BAD_REQUEST)
-        }
-    }
-}
-
-////////////////////////////////////////////// Router //////////////////////////////////////////////////
-
-pub fn create_entity_router() -> Router {
-    Router::new()
-        .route("/entity", post(create_entity))
-        .route("/entity/:entity_id", delete(delete_entity))
-}
-
 impl FromStr for Entity {
     type Err = EntityParseError;
 
+    /// Parses an Entity from its string representation.
+    ///
+    /// Expected format: "entity:{base64}" where base64 is 43 characters of URL-safe base64.
+    ///
+    /// # Arguments
+    /// * `s` - The string to parse
+    ///
+    /// # Returns
+    /// * `Ok(Entity)` - The parsed entity on success
+    /// * `Err(EntityParseError)` - The specific parsing error on failure
+    ///
+    /// # Examples
+    /// ```
+    /// # use stigmergy::Entity;
+    /// let entity: Entity = "entity:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".parse().unwrap();
+    /// ```
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if !s.starts_with("entity:") {
+        if !s.starts_with(ENTITY_PREFIX) {
             return Err(EntityParseError::InvalidPrefix);
         }
 
-        let base64_part = &s[7..]; // Skip "entity:"
+        let base64_part = &s[ENTITY_PREFIX_LEN..]; // Skip "entity:"
 
-        if base64_part.len() != 43 {
+        if base64_part.len() != BASE64_ENCODED_LEN {
             return Err(EntityParseError::InvalidFormat);
         }
 
@@ -258,6 +345,109 @@ impl FromStr for Entity {
         bytes.copy_from_slice(&decoded);
         Ok(Entity(bytes))
     }
+}
+
+////////////////////////////////////////////// Routes //////////////////////////////////////////////////
+
+/// Request structure for creating a new entity.
+///
+/// If `entity` is `None`, a random entity will be generated that avoids
+/// the URL-unsafe characters `-` and `_` in its base64 representation.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateEntityRequest {
+    /// Optional entity to create. If None, a random entity will be generated.
+    pub entity: Option<Entity>,
+}
+
+/// Response structure for entity creation.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateEntityResponse {
+    /// The entity that was created or provided.
+    pub entity: Entity,
+    /// Whether the entity was successfully created (always true in current implementation).
+    pub created: bool,
+}
+
+/// Creates a new entity.
+///
+/// If no entity is provided in the request, generates a random entity that avoids
+/// URL-unsafe characters (-_) in its base64 representation. Uses a bounded retry
+/// approach to prevent infinite loops.
+///
+/// # Errors
+/// Returns `StatusCode::INTERNAL_SERVER_ERROR` if random number generation fails.
+async fn create_entity(
+    Json(request): Json<CreateEntityRequest>,
+) -> Result<Json<CreateEntityResponse>, StatusCode> {
+    let entity = match request.entity {
+        Some(entity) => entity,
+        None => {
+            Entity::random_url_safe().map_err(|e| {
+                eprintln!("Failed to generate random entity: {}", e); // TODO(claude): cleanup this output
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?
+        }
+    };
+
+    let response = CreateEntityResponse {
+        entity,
+        created: true,
+    };
+
+    Ok(Json(response))
+}
+
+/// Deletes an entity by its base64 identifier.
+///
+/// # Arguments
+/// * `entity_base64` - The base64 part of the entity ID (without "entity:" prefix)
+///
+/// # Returns
+/// * `Ok(StatusCode::NO_CONTENT)` - Entity was found and deleted
+/// * `Err(StatusCode::BAD_REQUEST)` - Invalid entity ID format
+///
+/// # Note
+/// Currently this is a mock implementation that only validates the entity format
+/// but doesn't perform actual deletion from a data store.
+async fn delete_entity(Path(entity_base64): Path<String>) -> Result<StatusCode, StatusCode> {
+    // Construct full entity string from base64 part
+    let entity_string = format!("{}{}", ENTITY_PREFIX, entity_base64);
+
+    // Parse the entity ID
+    match Entity::from_str(&entity_string) {
+        Ok(_entity) => {
+            // Entity exists and was deleted successfully
+            // TODO(user): Implement actual deletion logic with proper data store integration
+            Ok(StatusCode::NO_CONTENT)
+        }
+        Err(parse_error) => {
+            // Invalid entity ID format - log the specific error for debugging
+            eprintln!("Invalid entity ID '{}': {}", entity_base64, parse_error); // TODO(claude): cleanup this output
+            Err(StatusCode::BAD_REQUEST)
+        }
+    }
+}
+
+////////////////////////////////////////////// Router //////////////////////////////////////////////////
+
+/// Creates an Axum router with entity management endpoints.
+///
+/// # Routes
+/// - `POST /entity` - Create a new entity (optionally random)
+/// - `DELETE /entity/{entity_id}` - Delete an entity by ID
+///
+/// # Returns
+/// An Axum `Router` configured with the entity endpoints.
+///
+/// # Examples
+/// ```
+/// # use stigmergy::create_entity_router;
+/// let router = create_entity_router();
+/// ```
+pub fn create_entity_router() -> Router {
+    Router::new()
+        .route("/entity", post(create_entity))
+        .route("/entity/:entity_id", delete(delete_entity))
 }
 
 #[cfg(test)]
@@ -301,7 +491,7 @@ mod tests {
         let entity = Entity::new([0u8; 32]);
         let display = format!("{}", entity);
         assert!(display.starts_with("entity:"));
-        assert_eq!(display.len(), 50); // "entity:" (7) + base64 (43)
+        assert_eq!(display.len(), ENTITY_PREFIX_LEN + BASE64_ENCODED_LEN);
         assert_eq!(
             display,
             "entity:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
@@ -316,7 +506,7 @@ mod tests {
         let entity = Entity::new(bytes);
         let display = format!("{}", entity);
         assert!(display.starts_with("entity:"));
-        assert_eq!(display.len(), 50);
+        assert_eq!(display.len(), ENTITY_PREFIX_LEN + BASE64_ENCODED_LEN);
     }
 
     #[test]
@@ -375,9 +565,9 @@ mod tests {
         let display = format!("{}", entity);
 
         // Verify it matches the expected regex pattern entity:[0-9A-Za-z_-]{43}
-        assert!(display.starts_with("entity:"));
+        assert!(display.starts_with(ENTITY_PREFIX));
         let base64_part = &display[7..];
-        assert_eq!(base64_part.len(), 43);
+        assert_eq!(base64_part.len(), BASE64_ENCODED_LEN);
 
         // Check that all characters are valid URL-safe base64 chars
         for c in base64_part.chars() {
@@ -457,7 +647,7 @@ mod tests {
                 response.expect("/dev/urandom should be available for random entity generation");
 
             let entity_string = response.0.entity.to_string();
-            let base64_part = &entity_string[7..]; // Skip "entity:"
+            let base64_part = &entity_string[ENTITY_PREFIX_LEN..]; // Skip "entity:"
 
             // Ensure no - or _ characters in the base64 part
             assert!(
@@ -488,7 +678,7 @@ mod tests {
         let entity = Entity::new([1u8; 32]);
         let entity_str = entity.to_string();
         // Extract just the base64 part after "entity:"
-        let base64_part = entity_str.strip_prefix("entity:").unwrap();
+        let base64_part = entity_str.strip_prefix(ENTITY_PREFIX).unwrap();
 
         let result = delete_entity(Path(base64_part.to_string())).await;
 

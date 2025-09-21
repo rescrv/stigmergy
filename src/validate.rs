@@ -1,8 +1,8 @@
 use serde_json::{Map, Value};
 
 use crate::json_schema::{
-    ENUM_KEY, ITEMS_KEY, JsonSchema, PROPERTIES_KEY, REQUIRED_KEY, TYPE_ARRAY, TYPE_BOOLEAN,
-    TYPE_INTEGER, TYPE_KEY, TYPE_NULL, TYPE_NUMBER, TYPE_OBJECT, TYPE_STRING,
+    ENUM_KEY, ITEMS_KEY, JsonSchema, ONE_OF_KEY, PROPERTIES_KEY, REQUIRED_KEY, TYPE_ARRAY,
+    TYPE_BOOLEAN, TYPE_INTEGER, TYPE_KEY, TYPE_NULL, TYPE_NUMBER, TYPE_OBJECT, TYPE_STRING,
 };
 
 #[derive(Debug, Clone)]
@@ -72,6 +72,12 @@ pub fn validate_value(value: &Value, schema: &Value) -> Result<(), ValidationErr
         .as_object()
         .ok_or_else(|| ValidationError::InvalidSchema("Schema must be an object".to_string()))?;
 
+    // Check for oneOf first
+    if let Some(one_of_schemas) = schema_obj.get(ONE_OF_KEY) {
+        return validate_one_of(value, one_of_schemas);
+    }
+
+    // Then check for regular type-based validation
     let schema_type = schema_obj
         .get(TYPE_KEY)
         .and_then(|v| v.as_str())
@@ -92,6 +98,26 @@ pub fn validate_value(value: &Value, schema: &Value) -> Result<(), ValidationErr
             schema_type
         ))),
     }
+}
+
+fn validate_one_of(value: &Value, one_of_schemas: &Value) -> Result<(), ValidationError> {
+    let schemas_array = one_of_schemas
+        .as_array()
+        .ok_or_else(|| ValidationError::InvalidSchema("oneOf must be an array".to_string()))?;
+
+    let mut validation_errors = Vec::new();
+
+    for schema in schemas_array {
+        match validate_value(value, schema) {
+            Ok(()) => return Ok(()),
+            Err(e) => validation_errors.push(e),
+        }
+    }
+
+    Err(ValidationError::InvalidSchema(format!(
+        "Value doesn't match any oneOf schemas. Errors: {:?}",
+        validation_errors
+    )))
 }
 
 fn validate_null(value: &Value) -> Result<(), ValidationError> {
@@ -644,5 +670,139 @@ mod tests {
             }
             _ => panic!("Expected ObjectPropertyError"),
         }
+    }
+
+    #[test]
+    fn validate_one_of_success_first_schema() {
+        let schema = json!({
+            "oneOf": [
+                { "type": "string" },
+                { "type": "number" }
+            ]
+        });
+
+        let string_value = json!("hello");
+        assert!(validate_value(&string_value, &schema).is_ok());
+
+        let number_value = json!(42);
+        assert!(validate_value(&number_value, &schema).is_ok());
+    }
+
+    #[test]
+    fn validate_one_of_failure() {
+        let schema = json!({
+            "oneOf": [
+                { "type": "string" },
+                { "type": "number" }
+            ]
+        });
+
+        let boolean_value = json!(true);
+        let result = validate_value(&boolean_value, &schema);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::InvalidSchema(_)
+        ));
+    }
+
+    #[test]
+    fn validate_enum_one_of_comprehensive() {
+        let schema = json!({
+            "oneOf": [
+                {
+                    "type": "string",
+                    "enum": ["Red", "Green", "Blue"]
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "Custom": { "type": "string" }
+                    },
+                    "required": ["Custom"]
+                }
+            ]
+        });
+
+        assert!(validate_value(&json!("Red"), &schema).is_ok());
+        assert!(validate_value(&json!("Blue"), &schema).is_ok());
+        assert!(validate_value(&json!({"Custom": "purple"}), &schema).is_ok());
+
+        assert!(validate_value(&json!("Yellow"), &schema).is_err());
+        assert!(validate_value(&json!({"Custom": 123}), &schema).is_err());
+        assert!(validate_value(&json!(42), &schema).is_err());
+    }
+
+    #[test]
+    fn validate_tagged_union_enum_variants() {
+        let schema = json!({
+            "oneOf": [
+                {
+                    "type": "object",
+                    "properties": {
+                        "Circle": {
+                            "type": "object",
+                            "properties": {
+                                "radius": { "type": "number" }
+                            },
+                            "required": ["radius"]
+                        }
+                    },
+                    "required": ["Circle"]
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "Rectangle": {
+                            "type": "object",
+                            "properties": {
+                                "width": { "type": "number" },
+                                "height": { "type": "number" }
+                            },
+                            "required": ["width", "height"]
+                        }
+                    },
+                    "required": ["Rectangle"]
+                }
+            ]
+        });
+
+        assert!(validate_value(&json!({"Circle": {"radius": 5.0}}), &schema).is_ok());
+        assert!(
+            validate_value(
+                &json!({"Rectangle": {"width": 10.0, "height": 20.0}}),
+                &schema
+            )
+            .is_ok()
+        );
+
+        assert!(validate_value(&json!({"Circle": {"radius": "invalid"}}), &schema).is_err());
+        assert!(validate_value(&json!({"Rectangle": {"width": 10.0}}), &schema).is_err());
+        assert!(validate_value(&json!({"Triangle": {"side": 5.0}}), &schema).is_err());
+    }
+
+    #[test]
+    fn validate_discriminator_validation() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "TwoD": {
+                    "type": "array",
+                    "items": [
+                        { "type": "number" },
+                        { "type": "number" }
+                    ]
+                }
+            },
+            "required": ["TwoD"]
+        });
+
+        assert!(validate_value(&json!({"TwoD": [1.0, 2.0]}), &schema).is_ok());
+
+        assert!(validate_value(&json!({"ThreeD": [1.0, 2.0, 3.0]}), &schema).is_err());
+
+        assert!(validate_value(&json!({}), &schema).is_err());
+
+        assert!(validate_value(&json!({"TwoD": [1.0, "invalid"]}), &schema).is_err());
     }
 }

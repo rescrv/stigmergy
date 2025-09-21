@@ -16,6 +16,7 @@ pub(crate) const PROPERTIES_KEY: &str = "properties";
 pub(crate) const REQUIRED_KEY: &str = "required";
 pub(crate) const ITEMS_KEY: &str = "items";
 pub(crate) const ENUM_KEY: &str = "enum";
+pub(crate) const ONE_OF_KEY: &str = "oneOf";
 
 #[derive(Debug, Clone)]
 pub struct JsonSchema {
@@ -43,6 +44,29 @@ impl JsonSchema {
 
     pub fn to_string(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(&self.schema)
+    }
+
+    pub fn create_enum_schema(
+        unit_variants: Vec<String>,
+        complex_variants: Vec<JsonSchema>,
+    ) -> Self {
+        let mut schemas = Vec::new();
+
+        if !unit_variants.is_empty() {
+            schemas.push(SchemaGenerator::create_enum_schema(unit_variants));
+        }
+
+        for complex_variant in complex_variants {
+            schemas.push(complex_variant.schema);
+        }
+
+        let schema = if schemas.len() == 1 {
+            schemas.into_iter().next().unwrap()
+        } else {
+            SchemaGenerator::create_one_of_schema(schemas)
+        };
+
+        JsonSchema { schema }
     }
 
     // TODO(claude): Extract schema creation logic to reduce duplication with SchemaGenerator
@@ -188,6 +212,22 @@ impl SchemaGenerator {
     fn create_primitive_schema(type_name: &str) -> Value {
         let mut schema = Map::new();
         schema.insert(TYPE_KEY.to_string(), Value::String(type_name.to_string()));
+        Value::Object(schema)
+    }
+
+    fn create_one_of_schema(schemas: Vec<Value>) -> Value {
+        let mut schema = Map::new();
+        schema.insert(ONE_OF_KEY.to_string(), Value::Array(schemas));
+        Value::Object(schema)
+    }
+
+    fn create_enum_schema(variants: Vec<String>) -> Value {
+        let mut schema = Map::new();
+        schema.insert(TYPE_KEY.to_string(), Value::String(TYPE_STRING.to_string()));
+        schema.insert(
+            ENUM_KEY.to_string(),
+            Value::Array(variants.into_iter().map(Value::String).collect()),
+        );
         Value::Object(schema)
     }
 }
@@ -356,13 +396,29 @@ impl<'a> Serializer for &'a mut SchemaGenerator {
         self,
         _name: &'static str,
         _variant_index: u32,
-        _variant: &'static str,
+        variant: &'static str,
         value: &T,
     ) -> Result<Self::Ok, Self::Error>
     where
         T: ?Sized + Serialize,
     {
-        value.serialize(self)
+        let mut sub_generator = SchemaGenerator::new();
+        value.serialize(&mut sub_generator)?;
+        let value_schema = sub_generator.into_schema();
+
+        let mut properties = Map::new();
+        properties.insert(variant.to_string(), value_schema);
+
+        let mut schema = Map::new();
+        schema.insert(TYPE_KEY.to_string(), Value::String(TYPE_OBJECT.to_string()));
+        schema.insert(PROPERTIES_KEY.to_string(), Value::Object(properties));
+        schema.insert(
+            REQUIRED_KEY.to_string(),
+            Value::Array(vec![Value::String(variant.to_string())]),
+        );
+
+        self.current_schema = Value::Object(schema);
+        Ok(())
     }
 
     fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
@@ -394,12 +450,13 @@ impl<'a> Serializer for &'a mut SchemaGenerator {
         self,
         _name: &'static str,
         _variant_index: u32,
-        _variant: &'static str,
+        variant: &'static str,
         _len: usize,
     ) -> Result<Self::SerializeTupleVariant, Self::Error> {
         Ok(TupleVariantSchemaBuilder {
             generator: self,
             schemas: Vec::new(),
+            variant_name: variant.to_string(),
         })
     }
 
@@ -426,12 +483,13 @@ impl<'a> Serializer for &'a mut SchemaGenerator {
         self,
         _name: &'static str,
         _variant_index: u32,
-        _variant: &'static str,
+        variant: &'static str,
         _len: usize,
     ) -> Result<Self::SerializeStructVariant, Self::Error> {
         Ok(StructVariantSchemaBuilder {
             generator: self,
             properties: Map::new(),
+            variant_name: variant.to_string(),
         })
     }
 }
@@ -525,6 +583,7 @@ impl SerializeTupleStruct for TupleStructSchemaBuilder<'_> {
 struct TupleVariantSchemaBuilder<'a> {
     generator: &'a mut SchemaGenerator,
     schemas: Vec<Value>,
+    variant_name: String,
 }
 
 impl SerializeTupleVariant for TupleVariantSchemaBuilder<'_> {
@@ -542,9 +601,26 @@ impl SerializeTupleVariant for TupleVariantSchemaBuilder<'_> {
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
+        let tuple_schema = if self.schemas.len() == 1 {
+            self.schemas.into_iter().next().unwrap()
+        } else {
+            let mut array_schema = Map::new();
+            array_schema.insert(TYPE_KEY.to_string(), Value::String(TYPE_ARRAY.to_string()));
+            array_schema.insert(ITEMS_KEY.to_string(), Value::Array(self.schemas));
+            Value::Object(array_schema)
+        };
+
+        let mut properties = Map::new();
+        properties.insert(self.variant_name.clone(), tuple_schema);
+
         let mut schema = Map::new();
-        schema.insert(TYPE_KEY.to_string(), Value::String(TYPE_ARRAY.to_string()));
-        schema.insert(ITEMS_KEY.to_string(), Value::Array(self.schemas));
+        schema.insert(TYPE_KEY.to_string(), Value::String(TYPE_OBJECT.to_string()));
+        schema.insert(PROPERTIES_KEY.to_string(), Value::Object(properties));
+        schema.insert(
+            REQUIRED_KEY.to_string(),
+            Value::Array(vec![Value::String(self.variant_name)]),
+        );
+
         self.generator.current_schema = Value::Object(schema);
         Ok(())
     }
@@ -622,6 +698,7 @@ impl SerializeStruct for StructSchemaBuilder<'_> {
 struct StructVariantSchemaBuilder<'a> {
     generator: &'a mut SchemaGenerator,
     properties: Map<String, Value>,
+    variant_name: String,
 }
 
 impl SerializeStructVariant for StructVariantSchemaBuilder<'_> {
@@ -640,7 +717,20 @@ impl SerializeStructVariant for StructVariantSchemaBuilder<'_> {
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        self.generator.current_schema = SchemaGenerator::create_object_schema(self.properties);
+        let struct_schema = SchemaGenerator::create_object_schema(self.properties);
+
+        let mut properties = Map::new();
+        properties.insert(self.variant_name.clone(), struct_schema);
+
+        let mut schema = Map::new();
+        schema.insert(TYPE_KEY.to_string(), Value::String(TYPE_OBJECT.to_string()));
+        schema.insert(PROPERTIES_KEY.to_string(), Value::Object(properties));
+        schema.insert(
+            REQUIRED_KEY.to_string(),
+            Value::Array(vec![Value::String(self.variant_name)]),
+        );
+
+        self.generator.current_schema = Value::Object(schema);
         Ok(())
     }
 }
@@ -1094,14 +1184,38 @@ mod tests {
     }
 
     #[test]
+    fn enum_newtype_variant_individual_schema() {
+        let color_custom = serde_json::json!({"Custom": "purple"});
+        let schema = JsonSchema::from_value(&color_custom).unwrap();
+        let expected = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "Custom": { "type": "string" }
+            },
+            "required": ["Custom"]
+        });
+        assert_eq!(*schema.as_value(), expected);
+        println!(
+            "Individual enum newtype variant schema: {}",
+            schema.to_string().unwrap()
+        );
+    }
+
+    #[test]
     fn enum_struct_variant_schema() {
         let schema = JsonSchema::from_type::<Shape>().unwrap();
         let expected = serde_json::json!({
             "type": "object",
             "properties": {
-                "radius": { "type": "number" }
+                "Circle": {
+                    "type": "object",
+                    "properties": {
+                        "radius": { "type": "number" }
+                    },
+                    "required": ["radius"]
+                }
             },
-            "required": ["radius"]
+            "required": ["Circle"]
         });
         assert_eq!(*schema.as_value(), expected);
         println!(
@@ -1114,14 +1228,53 @@ mod tests {
     fn enum_tuple_variant_schema() {
         let schema = JsonSchema::from_type::<Point>().unwrap();
         let expected = serde_json::json!({
-            "type": "array",
-            "items": [
-                { "type": "number" },
-                { "type": "number" }
-            ]
+            "type": "object",
+            "properties": {
+                "TwoD": {
+                    "type": "array",
+                    "items": [
+                        { "type": "number" },
+                        { "type": "number" }
+                    ]
+                }
+            },
+            "required": ["TwoD"]
         });
         assert_eq!(*schema.as_value(), expected);
         println!("Enum tuple variant schema: {}", schema.to_string().unwrap());
+    }
+
+    #[test]
+    fn comprehensive_enum_schema() {
+        let color_custom_schema =
+            JsonSchema::from_value(&serde_json::json!({"Custom": "purple"})).unwrap();
+
+        let comprehensive_color_schema = JsonSchema::create_enum_schema(
+            vec!["Red".to_string(), "Green".to_string(), "Blue".to_string()],
+            vec![color_custom_schema],
+        );
+
+        let expected = serde_json::json!({
+            "oneOf": [
+                {
+                    "type": "string",
+                    "enum": ["Red", "Green", "Blue"]
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "Custom": { "type": "string" }
+                    },
+                    "required": ["Custom"]
+                }
+            ]
+        });
+
+        assert_eq!(*comprehensive_color_schema.as_value(), expected);
+        println!(
+            "Comprehensive enum schema: {}",
+            comprehensive_color_schema.to_string().unwrap()
+        );
     }
 
     #[test]
