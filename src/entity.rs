@@ -19,7 +19,7 @@ use axum::Router;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Json;
-use axum::routing::{delete, post};
+use axum::routing::{delete, get};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -490,6 +490,27 @@ async fn delete_entity(
     }
 }
 
+/// Lists all entities stored in the data store.
+///
+/// # Arguments
+/// * `State((logger, data_store))` - The application state containing logger and data store
+///
+/// # Returns
+/// * `Ok(Json<Vec<Entity>>)` - List of all entities on success
+/// * `Err(StatusCode::INTERNAL_SERVER_ERROR)` - If data store operation fails
+async fn list_entities(
+    State((_logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+) -> Result<Json<Vec<Entity>>, StatusCode> {
+    let entities = match data_store.list_entities() {
+        Ok(entities) => entities,
+        Err(_) => {
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+
+    Ok(Json(entities))
+}
+
 ////////////////////////////////////////////// Router //////////////////////////////////////////////////
 
 /// Creates an Axum router with entity management endpoints.
@@ -499,6 +520,7 @@ async fn delete_entity(
 /// * `data_store` - The data store implementation to use for persistence
 ///
 /// # Routes
+/// - `GET /entity` - List all entities
 /// - `POST /entity` - Create a new entity (optionally random)
 /// - `DELETE /entity/{entity_id}` - Delete an entity by ID
 ///
@@ -516,7 +538,7 @@ async fn delete_entity(
 /// ```
 pub fn create_entity_router(logger: Arc<DurableLogger>, data_store: Arc<dyn DataStore>) -> Router {
     Router::new()
-        .route("/entity", post(create_entity))
+        .route("/entity", get(list_entities).post(create_entity))
         .route("/entity/:entity_id", delete(delete_entity))
         .with_state((logger, data_store))
 }

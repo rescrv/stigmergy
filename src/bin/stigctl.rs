@@ -21,6 +21,7 @@ const USAGE: &str = r#"Usage: stigctl <command> [args...]
 Commands:
   apply <file.jsonl>                           Apply JSONL log file operations
   entity create                                Create a new entity
+  entity list                                  List all entities
   entity delete <entity-id>                    Delete an entity
   componentdefinition create <name> <schema>   Create a component definition
   componentdefinition list                     List all component definitions
@@ -70,7 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if free.len() < 2 {
                 cli_utils::exit_with_usage_error(
                     "entity command requires a subcommand",
-                    "Usage: stigctl entity <create|delete> [args...]",
+                    "Usage: stigctl entity <create|list|delete> [args...]",
                 );
             }
             handle_entity_command(&free[1..], &client).await;
@@ -118,6 +119,22 @@ async fn handle_entity_command(args: &[String], client: &http_utils::StigmergyCl
 
             println!("Created entity: {}", response.entity);
         }
+        "list" => {
+            let entities = http_utils::execute_or_exit(
+                || client.get::<Vec<Entity>>("entity"),
+                "Failed to list entities",
+            )
+            .await;
+
+            if entities.is_empty() {
+                println!("No entities found");
+            } else {
+                println!("Entities:");
+                for entity in entities {
+                    println!("  {}", entity);
+                }
+            }
+        }
         "delete" => {
             if args.len() < 2 {
                 cli_utils::exit_with_usage_error(
@@ -131,13 +148,15 @@ async fn handle_entity_command(args: &[String], client: &http_utils::StigmergyCl
                 cli_utils::exit_with_error(&format!("Invalid entity ID format: {}", entity_id_str))
             });
 
-            let path = format!("entity/{}", entity_id);
+            // Extract base64 part (skip "entity:" prefix) for URL path
+            let base64_part = &entity_id_str[7..]; // Skip "entity:" prefix
+            let path = format!("entity/{}", base64_part);
             http_utils::execute_or_exit(|| client.delete(&path), "Failed to delete entity").await;
             println!("Deleted entity: {}", entity_id);
         }
         _ => {
             cli_utils::exit_with_error(&format!(
-                "Unknown entity subcommand '{}'. Available subcommands: create, delete",
+                "Unknown entity subcommand '{}'. Available subcommands: create, list, delete",
                 args[0]
             ));
         }

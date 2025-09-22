@@ -28,6 +28,10 @@ impl Component {
             None
         }
     }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 fn is_valid_rust_identifier(s: &str) -> bool {
@@ -199,7 +203,7 @@ async fn create_component_definition(
         }
     };
 
-    let def_id = format!("{:?}", definition.component);
+    let def_id = definition.component.as_str().to_string();
     let result =
         DataStoreOperations::create_component_definition(&*data_store, &def_id, &definition);
     if !result.success {
@@ -250,7 +254,7 @@ async fn update_component_definition(
         }
     };
 
-    let def_id = format!("{:?}", definition.component);
+    let def_id = definition.component.as_str().to_string();
     let old_definition = data_store.get_component_definition(&def_id).ok().flatten();
     let result =
         DataStoreOperations::update_component_definition(&*data_store, &def_id, &definition);
@@ -990,16 +994,6 @@ mod tests {
     use crate::test_utils::test_helpers::{
         clear_log_file, create_test_logger_with_path, read_log_entries, test_data_store,
     };
-
-    fn create_test_entity() -> Entity {
-        Entity::random().unwrap()
-    }
-
-    fn create_test_entity_with_components(data_store: &dyn crate::DataStore) -> Entity {
-        let entity = create_test_entity();
-        data_store.create_entity(&entity).unwrap();
-        entity
-    }
 
     #[test]
     fn valid_rust_identifier_simple() {
@@ -2038,7 +2032,7 @@ mod tests {
 
         let definition = sample_component_definition();
         let data_store = test_data_store();
-        let def_id = format!("{:?}", definition.component);
+        let def_id = definition.component.as_str().to_string();
 
         // Create definition first
         data_store
@@ -2189,7 +2183,7 @@ mod tests {
 
         let data_store = test_data_store();
         let definition = sample_component_definition();
-        let def_id = format!("{:?}", definition.component);
+        let def_id = definition.component.as_str().to_string();
 
         // Test 201 Created for component definition
         let create_result = create_component_definition(
@@ -2234,6 +2228,121 @@ mod tests {
         )
         .await;
         assert_eq!(delete_result, Ok(StatusCode::NO_CONTENT));
+
+        clear_log_file(&log_path);
+    }
+
+    #[tokio::test]
+    async fn component_definition_create_and_get_round_trip() {
+        let (logger, log_path) = create_test_logger_with_path("component", "def_roundtrip");
+        clear_log_file(&log_path);
+
+        let definition = ComponentDefinition {
+            component: Component::new("RoundTripTest").unwrap(),
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "test_field": { "type": "string" }
+                }
+            }),
+        };
+
+        let data_store = test_data_store();
+
+        // Create the component definition
+        let create_result = create_component_definition(
+            State((logger.clone(), data_store.clone())),
+            Json(definition.clone()),
+        )
+        .await;
+        assert!(
+            create_result.is_ok(),
+            "Component definition creation should succeed"
+        );
+
+        // Now try to get it back using the same component name
+        let get_result = get_component_definition_by_id(
+            State((logger.clone(), data_store.clone())),
+            Path("RoundTripTest".to_string()),
+        )
+        .await;
+        assert!(
+            get_result.is_ok(),
+            "Should be able to retrieve the component definition by name"
+        );
+        let retrieved_definition = get_result.unwrap().0;
+
+        // Verify the retrieved definition matches what we created
+        assert_eq!(retrieved_definition.component, definition.component);
+        assert_eq!(retrieved_definition.schema, definition.schema);
+
+        clear_log_file(&log_path);
+    }
+
+    #[tokio::test]
+    async fn componentdefinition_get_works_correctly() {
+        let (logger, log_path) = create_test_logger_with_path("component", "def_get_test");
+        clear_log_file(&log_path);
+
+        let definition = ComponentDefinition {
+            component: Component::new("GetTestComponent").unwrap(),
+            schema: serde_json::json!({
+                "type": "string",
+                "minLength": 1
+            }),
+        };
+
+        let data_store = test_data_store();
+
+        // First create the component definition
+        let create_result = create_component_definition(
+            State((logger.clone(), data_store.clone())),
+            Json(definition.clone()),
+        )
+        .await;
+        assert!(
+            create_result.is_ok(),
+            "Should successfully create component definition"
+        );
+
+        // Now get it back using the exact component name (without Debug formatting)
+        let get_result = get_component_definition_by_id(
+            State((logger.clone(), data_store.clone())),
+            Path("GetTestComponent".to_string()), // This is what CLI sends
+        )
+        .await;
+
+        // Verify the get succeeds
+        assert!(
+            get_result.is_ok(),
+            "Should successfully retrieve component definition by name"
+        );
+
+        let retrieved = get_result.unwrap().0;
+        assert_eq!(
+            retrieved.component, definition.component,
+            "Component name should match"
+        );
+        assert_eq!(
+            retrieved.schema, definition.schema,
+            "Schema should match exactly"
+        );
+
+        // Also test that non-existent components return 404
+        let not_found_result = get_component_definition_by_id(
+            State((logger.clone(), data_store.clone())),
+            Path("NonExistentComponent".to_string()),
+        )
+        .await;
+        assert!(
+            not_found_result.is_err(),
+            "Should return error for non-existent component"
+        );
+        assert_eq!(
+            not_found_result.unwrap_err(),
+            StatusCode::NOT_FOUND,
+            "Should return 404 NOT_FOUND"
+        );
 
         clear_log_file(&log_path);
     }
