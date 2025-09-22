@@ -7,6 +7,11 @@ mod log_entry;
 mod test_utils;
 mod validate;
 
+// CLI utility modules
+pub mod cli_utils;
+pub mod component_utils;
+pub mod http_utils;
+
 pub use component::{Component, ComponentDefinition, create_component_router};
 pub use data_operations::{DataStoreOperations, OperationResult};
 pub use data_store::{DataStore, DataStoreError, InMemoryDataStore};

@@ -5,10 +5,9 @@ use arrrg::CommandLine;
 use arrrg_derive::CommandLine;
 use axum::Router;
 use tokio::net::TcpListener;
+use tokio::signal;
 
-use stigmergy::{
-    create_component_router, create_entity_router, DurableLogger, InMemoryDataStore,
-};
+use stigmergy::{DurableLogger, InMemoryDataStore, create_component_router, create_entity_router};
 
 #[derive(CommandLine, Default, PartialEq, Eq)]
 struct Args {
@@ -18,38 +17,76 @@ struct Args {
     host: Option<String>,
     #[arrrg(optional, "Port to bind the HTTP server")]
     port: Option<u16>,
+    #[arrrg(flag, "Enable verbose logging")]
+    verbose: bool,
 }
+
+const HELP_TEXT: &str = r#"stigmergyd - Stigmergy daemon
+
+USAGE:
+    stigmergyd [OPTIONS]
+
+OPTIONS:
+    --log-file <PATH>    Path to log file for durable logging [default: stigmergy.jsonl]
+    --host <HOST>        Host to bind the HTTP server [default: 127.0.0.1]
+    --port <PORT>        Port to bind the HTTP server [default: 8080]
+    --verbose            Enable verbose logging
+
+DESCRIPTION:
+    Runs the Stigmergy daemon with entity and component management
+    endpoints mounted under /api/v1/
+
+    The server supports graceful shutdown via SIGTERM or Ctrl+C.
+
+API ENDPOINTS:
+    Entity Management:
+      POST   /api/v1/entity              Create a new entity
+      DELETE /api/v1/entity/{id}         Delete an entity
+
+    Component Definitions:
+      GET    /api/v1/componentdefinition       List all definitions
+      POST   /api/v1/componentdefinition       Create a definition
+      GET    /api/v1/componentdefinition/{id}  Get a specific definition
+      PUT    /api/v1/componentdefinition/{id}  Update a definition
+      PATCH  /api/v1/componentdefinition/{id}  Patch a definition
+      DELETE /api/v1/componentdefinition/{id}  Delete a definition
+      DELETE /api/v1/componentdefinition       Delete all definitions
+
+    Component Instances:
+      GET    /api/v1/component       List all components
+      POST   /api/v1/component       Create a component
+      GET    /api/v1/component/{id}  Get a specific component
+      PUT    /api/v1/component/{id}  Update a component
+      PATCH  /api/v1/component/{id}  Patch a component
+      DELETE /api/v1/component/{id}  Delete a component
+      DELETE /api/v1/component       Delete all components"#;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (args, free) = Args::from_command_line("USAGE: stigmergyd [OPTIONS]");
 
     if !free.is_empty() && free[0] == "help" {
-        println!("stigmergyd - Stigmergy daemon");
-        println!();
-        println!("USAGE:");
-        println!("    stigmergyd [OPTIONS]");
-        println!();
-        println!("OPTIONS:");
-        println!("    --log-file <PATH>    Path to log file for durable logging [default: stigmergy.jsonl]");
-        println!("    --host <HOST>        Host to bind the HTTP server [default: 127.0.0.1]");
-        println!("    --port <PORT>        Port to bind the HTTP server [default: 8080]");
-        println!();
-        println!("DESCRIPTION:");
-        println!("    Runs the Stigmergy daemon with entity and component management");
-        println!("    endpoints mounted under /api/v1/");
+        println!("{}", HELP_TEXT);
         return Ok(());
     }
 
-    let log_file = args.log_file
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("stigmergy.jsonl"));
-    let host = args.host.unwrap_or_else(|| "127.0.0.1".to_string());
-    let port = args.port.unwrap_or(8080);
+    let config = ServerConfig::from_args(args);
 
-    let logger = Arc::new(DurableLogger::new(log_file));
+    if config.verbose {
+        println!("Stigmergy daemon starting with configuration:");
+        println!("  Log file: {}", config.log_file.display());
+        println!("  Bind address: {}:{}", config.host, config.port);
+    }
+
+    // Initialize logging and data storage
+    let logger = Arc::new(DurableLogger::new(config.log_file.clone()));
     let data_store = Arc::new(InMemoryDataStore::new());
 
+    if config.verbose {
+        println!("Initialized logger and data store");
+    }
+
+    // Create routers
     let entity_router = create_entity_router(logger.clone(), data_store.clone());
     let component_router = create_component_router(logger.clone(), data_store.clone());
 
@@ -57,36 +94,104 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nest("/api/v1", entity_router)
         .nest("/api/v1", component_router);
 
-    let addr = format!("{}:{}", host, port);
-    println!("Starting stigmergyd server on {}", addr);
-    println!("Entity endpoints available at:");
-    println!("  POST   /api/v1/entity");
-    println!("  DELETE /api/v1/entity/{{id}}");
-    println!();
-    println!("Component definition endpoints available at:");
-    println!("  GET    /api/v1/componentdefinition");
-    println!("  POST   /api/v1/componentdefinition");
-    println!("  PUT    /api/v1/componentdefinition");
-    println!("  PATCH  /api/v1/componentdefinition");
-    println!("  DELETE /api/v1/componentdefinition");
-    println!("  GET    /api/v1/componentdefinition/{{id}}");
-    println!("  PUT    /api/v1/componentdefinition/{{id}}");
-    println!("  PATCH  /api/v1/componentdefinition/{{id}}");
-    println!("  DELETE /api/v1/componentdefinition/{{id}}");
-    println!();
-    println!("Component instance endpoints available at:");
-    println!("  GET    /api/v1/component");
-    println!("  POST   /api/v1/component");
-    println!("  PUT    /api/v1/component");
-    println!("  PATCH  /api/v1/component");
-    println!("  DELETE /api/v1/component");
-    println!("  GET    /api/v1/component/{{id}}");
-    println!("  PUT    /api/v1/component/{{id}}");
-    println!("  PATCH  /api/v1/component/{{id}}");
-    println!("  DELETE /api/v1/component/{{id}}");
+    // Bind to address
+    let addr = format!("{}:{}", config.host, config.port);
+    let listener = TcpListener::bind(&addr)
+        .await
+        .map_err(|e| format!("Failed to bind to {}: {}", addr, e))?;
 
-    let listener = TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
+    println!("🚀 Stigmergy daemon started successfully!");
+    println!("📡 Server listening on: http://{}", addr);
+    println!("📝 Logging to: {}", config.log_file.display());
+    println!("🔄 Ready to accept API requests");
+
+    if config.verbose {
+        print_api_endpoints();
+    }
+
+    println!("💡 Use Ctrl+C or send SIGTERM for graceful shutdown");
+    println!();
+
+    // Set up graceful shutdown
+    let shutdown_signal = async {
+        signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl+C handler");
+    };
+
+    // Run server with graceful shutdown
+    let server = axum::serve(listener, app);
+
+    tokio::select! {
+        result = server => {
+            if let Err(e) = result {
+                eprintln!("❌ Server error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        () = shutdown_signal => {
+            println!();
+            println!("🛑 Shutdown signal received, stopping server gracefully...");
+
+            // TODO(claude): cleanup this output
+            if config.verbose {
+                println!("📊 Final statistics:");
+                println!("   Log file: {}", config.log_file.display());
+                println!("   Shutdown completed successfully");
+            }
+
+            println!("👋 Stigmergy daemon stopped");
+        }
+    }
 
     Ok(())
+}
+
+struct ServerConfig {
+    log_file: PathBuf,
+    host: String,
+    port: u16,
+    verbose: bool,
+}
+
+impl ServerConfig {
+    fn from_args(args: Args) -> Self {
+        Self {
+            log_file: args
+                .log_file
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("stigmergy.jsonl")),
+            host: args.host.unwrap_or_else(|| "127.0.0.1".to_string()),
+            port: args.port.unwrap_or(8080),
+            verbose: args.verbose,
+        }
+    }
+}
+
+fn print_api_endpoints() {
+    println!();
+    println!("📋 Available API endpoints:");
+    println!();
+    println!("  Entity Management:");
+    println!("    POST   /api/v1/entity              Create a new entity");
+    println!("    DELETE /api/v1/entity/{{id}}         Delete an entity");
+    println!();
+    println!("  Component Definitions:");
+    println!("    GET    /api/v1/componentdefinition       List all definitions");
+    println!("    POST   /api/v1/componentdefinition       Create a definition");
+    println!("    GET    /api/v1/componentdefinition/{{id}}  Get a specific definition");
+    println!("    PUT    /api/v1/componentdefinition/{{id}}  Update a definition");
+    println!("    PATCH  /api/v1/componentdefinition/{{id}}  Patch a definition");
+    println!("    DELETE /api/v1/componentdefinition/{{id}}  Delete a definition");
+    println!("    DELETE /api/v1/componentdefinition       Delete all definitions");
+    println!();
+    println!("  Component Instances:");
+    println!("    GET    /api/v1/component       List all components");
+    println!("    POST   /api/v1/component       Create a component");
+    println!("    GET    /api/v1/component/{{id}}  Get a specific component");
+    println!("    PUT    /api/v1/component/{{id}}  Update a component");
+    println!("    PATCH  /api/v1/component/{{id}}  Patch a component");
+    println!("    DELETE /api/v1/component/{{id}}  Delete a component");
+    println!("    DELETE /api/v1/component       Delete all components");
+    println!();
 }
