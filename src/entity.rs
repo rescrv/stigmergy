@@ -23,7 +23,10 @@ use axum::routing::{delete, post};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::{DataStore, DurableLogger, LogEntry, LogMetadata, LogOperation, OperationStatus};
+use crate::{
+    DataStore, DataStoreOperations, DurableLogger, LogEntry, LogMetadata, LogOperation,
+    OperationStatus,
+};
 
 /////////////////////////////////////////////// Entity ////////////////////////////////////////////////
 
@@ -399,24 +402,25 @@ async fn create_entity(
         })?,
     };
 
-    // Store the entity in the data store
-    if let Err(e) = data_store.create_entity(&entity) {
-        let log_entry = LogEntry::new(
-            LogOperation::EntityCreate { entity, was_random },
-            LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
-        );
-        logger.log_or_error(&log_entry);
-        return Err(match e {
+    // Store the entity in the data store using the standardized operation
+    let result = DataStoreOperations::create_entity(&*data_store, &entity);
+
+    let log_entry = LogEntry::new(
+        LogOperation::EntityCreate { entity, was_random },
+        LogMetadata::rest_api(None).with_status(if result.success {
+            OperationStatus::Success
+        } else {
+            OperationStatus::Failed
+        }),
+    );
+    logger.log_or_error(&log_entry);
+
+    if !result.success {
+        return Err(match result.into_error() {
             crate::DataStoreError::AlreadyExists => StatusCode::CONFLICT,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         });
     }
-
-    let log_entry = LogEntry::new(
-        LogOperation::EntityCreate { entity, was_random },
-        LogMetadata::rest_api(None),
-    );
-    logger.log_or_error(&log_entry);
 
     let response = CreateEntityResponse {
         entity,
@@ -448,8 +452,9 @@ async fn delete_entity(
     // Parse the entity ID
     match Entity::from_str(&entity_string) {
         Ok(_entity) => {
-            // Attempt to delete from data store
-            let success: bool = data_store.delete_entity(&entity_string).unwrap_or_default();
+            // Attempt to delete from data store using the standardized operation
+            let result = DataStoreOperations::delete_entity(&*data_store, &entity_string);
+            let success = result.success && result.data.unwrap_or(false);
 
             let log_entry = LogEntry::new(
                 LogOperation::EntityDelete {
@@ -519,6 +524,9 @@ pub fn create_entity_router(logger: Arc<DurableLogger>, data_store: Arc<dyn Data
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::test_helpers::{
+        clear_log_file, create_test_logger_with_path, read_log_entries, test_data_store,
+    };
     use axum::extract::State;
 
     fn test_logger() -> Arc<DurableLogger> {
@@ -531,11 +539,6 @@ mod tests {
             .as_millis();
         let test_path = format!("test_entity_{}_{}.jsonl", process::id(), timestamp);
         Arc::new(DurableLogger::new(PathBuf::from(test_path)))
-    }
-
-    fn test_data_store() -> Arc<dyn DataStore> {
-        use crate::InMemoryDataStore;
-        Arc::new(InMemoryDataStore::new())
     }
 
     #[test]
@@ -798,50 +801,9 @@ mod tests {
         assert_eq!(result, Err(StatusCode::BAD_REQUEST));
     }
 
-    // Helper function to read and parse log entries from a file
-    fn read_log_entries(log_path: &std::path::Path) -> Vec<LogEntry> {
-        use std::fs;
-        if !log_path.exists() {
-            return vec![];
-        }
-
-        let contents = fs::read_to_string(log_path).unwrap_or_default();
-        contents
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(|line| serde_json::from_str::<LogEntry>(line).expect("Failed to parse log entry"))
-            .collect()
-    }
-
-    // Helper function to clear a log file
-    fn clear_log_file(log_path: &std::path::Path) {
-        use std::fs;
-        if log_path.exists() {
-            fs::remove_file(log_path).ok();
-        }
-    }
-
-    // Helper function to create a unique test logger with predictable file name
-    fn create_test_logger_with_path(suffix: &str) -> (Arc<DurableLogger>, std::path::PathBuf) {
-        use std::process;
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
-        let test_path = std::path::PathBuf::from(format!(
-            "test_entity_logging_{}_{}_{}.jsonl",
-            process::id(),
-            timestamp,
-            suffix
-        ));
-        let logger = Arc::new(DurableLogger::new(test_path.clone()));
-        (logger, test_path)
-    }
-
     #[tokio::test]
     async fn create_entity_success_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("create_success");
+        let (logger, log_path) = create_test_logger_with_path("entity", "create_success");
         clear_log_file(&log_path);
 
         let test_entity = Entity::new([42u8; 32]);
@@ -894,7 +856,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_entity_random_success_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("create_random");
+        let (logger, log_path) = create_test_logger_with_path("entity", "create_random");
         clear_log_file(&log_path);
 
         let request = CreateEntityRequest { entity: None };
@@ -945,7 +907,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_entity_success_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("delete_success");
+        let (logger, log_path) = create_test_logger_with_path("entity", "delete_success");
         clear_log_file(&log_path);
 
         let entity = Entity::new([1u8; 32]);
@@ -996,7 +958,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_entity_failure_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("delete_failure");
+        let (logger, log_path) = create_test_logger_with_path("entity", "delete_failure");
         clear_log_file(&log_path);
 
         let invalid_base64 = "invalid_entity_id";

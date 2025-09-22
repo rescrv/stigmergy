@@ -10,8 +10,8 @@ use serde_json::Value;
 use std::sync::Arc;
 
 use crate::{
-    DataStore, DurableLogger, LogEntry, LogMetadata, LogOperation, OperationStatus,
-    ValidationError, ValidationResult as LogValidationResult, validate_value,
+    DataStore, DataStoreOperations, DurableLogger, LogEntry, LogMetadata, LogOperation,
+    OperationStatus, ValidationError, ValidationResult as LogValidationResult, validate_value,
 };
 
 ///////////////////////////////////////////// Component ////////////////////////////////////////////
@@ -161,22 +161,27 @@ fn validate_schema_structure(schema: &Value) -> Result<(), ValidationError> {
 ////////////////////////////////////////////// routes //////////////////////////////////////////////
 
 async fn get_component_definitions(
-    State((logger, _data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Query(_params): Query<HashMap<String, String>>,
 ) -> Result<Json<Vec<ComponentDefinition>>, StatusCode> {
+    let definitions = match data_store.list_component_definitions() {
+        Ok(def_list) => def_list.into_iter().map(|(_id, def)| def).collect(),
+        Err(_) => vec![],
+    };
+
     let log_entry = LogEntry::new(
         LogOperation::ComponentDefinitionGet {
             definition_id: None,
-            found: true,
+            found: !definitions.is_empty(),
         },
         LogMetadata::rest_api(None),
     );
     logger.log_or_error(&log_entry);
-    Ok(Json(vec![]))
+    Ok(Json(definitions))
 }
 
 async fn create_component_definition(
-    State((logger, _data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Json(definition): Json<ComponentDefinition>,
 ) -> Result<Json<ComponentDefinition>, StatusCode> {
     let validation_result = match definition.validate_schema() {
@@ -194,6 +199,24 @@ async fn create_component_definition(
         }
     };
 
+    let def_id = format!("{:?}", definition.component);
+    let result =
+        DataStoreOperations::create_component_definition(&*data_store, &def_id, &definition);
+    if !result.success {
+        let log_entry = LogEntry::new(
+            LogOperation::ComponentDefinitionCreate {
+                definition: definition.clone(),
+                validation_result,
+            },
+            LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+        );
+        logger.log_or_error(&log_entry);
+        return Err(match result.into_error() {
+            crate::DataStoreError::AlreadyExists => StatusCode::CONFLICT,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        });
+    }
+
     let log_entry = LogEntry::new(
         LogOperation::ComponentDefinitionCreate {
             definition: definition.clone(),
@@ -207,7 +230,7 @@ async fn create_component_definition(
 }
 
 async fn update_component_definition(
-    State((logger, _data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Json(definition): Json<ComponentDefinition>,
 ) -> Result<Json<ComponentDefinition>, StatusCode> {
     let validation_result = match definition.validate_schema() {
@@ -227,10 +250,28 @@ async fn update_component_definition(
         }
     };
 
+    let def_id = format!("{:?}", definition.component);
+    let old_definition = data_store.get_component_definition(&def_id).ok().flatten();
+    let result =
+        DataStoreOperations::update_component_definition(&*data_store, &def_id, &definition);
+    if !result.success {
+        let log_entry = LogEntry::new(
+            LogOperation::ComponentDefinitionUpdate {
+                definition_id: def_id,
+                old_definition,
+                new_definition: definition.clone(),
+                validation_result,
+            },
+            LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+        );
+        logger.log_or_error(&log_entry);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
     let log_entry = LogEntry::new(
         LogOperation::ComponentDefinitionUpdate {
-            definition_id: format!("{:?}", definition.component),
-            old_definition: None,
+            definition_id: def_id,
+            old_definition,
             new_definition: definition.clone(),
             validation_result,
         },
@@ -242,7 +283,7 @@ async fn update_component_definition(
 }
 
 async fn patch_component_definition(
-    State((logger, _data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Json(patch): Json<Value>,
 ) -> Result<Json<ComponentDefinition>, StatusCode> {
     let component = Component::new("PatchedComponent").unwrap();
@@ -251,9 +292,25 @@ async fn patch_component_definition(
         schema: patch.clone(),
     };
 
+    let def_id = "PatchedComponent".to_string();
+    let result =
+        DataStoreOperations::update_component_definition(&*data_store, &def_id, &definition);
+    if !result.success {
+        let log_entry = LogEntry::new(
+            LogOperation::ComponentDefinitionPatch {
+                definition_id: def_id,
+                patch_data: patch,
+                result_definition: definition.clone(),
+            },
+            LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+        );
+        logger.log_or_error(&log_entry);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
     let log_entry = LogEntry::new(
         LogOperation::ComponentDefinitionPatch {
-            definition_id: "PatchedComponent".to_string(),
+            definition_id: def_id,
             patch_data: patch,
             result_definition: definition.clone(),
         },
@@ -265,10 +322,22 @@ async fn patch_component_definition(
 }
 
 async fn delete_component_definitions(
-    State((logger, _data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
 ) -> Result<StatusCode, StatusCode> {
+    let result = DataStoreOperations::delete_all_component_definitions(&*data_store);
+    let count_deleted = if result.success {
+        result.data.unwrap_or(0)
+    } else {
+        let log_entry = LogEntry::new(
+            LogOperation::ComponentDefinitionDeleteAll { count_deleted: 0 },
+            LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+        );
+        logger.log_or_error(&log_entry);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    };
+
     let log_entry = LogEntry::new(
-        LogOperation::ComponentDefinitionDeleteAll { count_deleted: 0 },
+        LogOperation::ComponentDefinitionDeleteAll { count_deleted },
         LogMetadata::rest_api(None),
     );
     logger.log_or_error(&log_entry);
@@ -277,14 +346,22 @@ async fn delete_component_definitions(
 }
 
 async fn get_component_definition_by_id(
-    State((logger, _data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Path(id): Path<String>,
 ) -> Result<Json<ComponentDefinition>, StatusCode> {
-    let component = Component::new(format!("Component{}", id))
-        .unwrap_or_else(|| Component::new("DefaultComponent").unwrap());
-    let definition = ComponentDefinition {
-        component,
-        schema: serde_json::json!({}),
+    let definition = match data_store.get_component_definition(&id) {
+        Ok(Some(def)) => def,
+        Ok(None) | Err(_) => {
+            let log_entry = LogEntry::new(
+                LogOperation::ComponentDefinitionGet {
+                    definition_id: Some(id),
+                    found: false,
+                },
+                LogMetadata::rest_api(None),
+            );
+            logger.log_or_error(&log_entry);
+            return Err(StatusCode::NOT_FOUND);
+        }
     };
 
     let log_entry = LogEntry::new(
@@ -300,7 +377,7 @@ async fn get_component_definition_by_id(
 }
 
 async fn update_component_definition_by_id(
-    State((logger, _data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Path(id): Path<String>,
     Json(definition): Json<ComponentDefinition>,
 ) -> Result<Json<ComponentDefinition>, StatusCode> {
@@ -321,10 +398,26 @@ async fn update_component_definition_by_id(
         }
     };
 
+    let old_definition = data_store.get_component_definition(&id).ok().flatten();
+    let result = DataStoreOperations::update_component_definition(&*data_store, &id, &definition);
+    if !result.success {
+        let log_entry = LogEntry::new(
+            LogOperation::ComponentDefinitionUpdate {
+                definition_id: id.clone(),
+                old_definition,
+                new_definition: definition.clone(),
+                validation_result,
+            },
+            LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+        );
+        logger.log_or_error(&log_entry);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
     let log_entry = LogEntry::new(
         LogOperation::ComponentDefinitionUpdate {
             definition_id: id,
-            old_definition: None,
+            old_definition,
             new_definition: definition.clone(),
             validation_result,
         },
@@ -336,7 +429,7 @@ async fn update_component_definition_by_id(
 }
 
 async fn patch_component_definition_by_id(
-    State((logger, _data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Path(id): Path<String>,
     Json(patch): Json<Value>,
 ) -> Result<Json<ComponentDefinition>, StatusCode> {
@@ -346,6 +439,20 @@ async fn patch_component_definition_by_id(
         component,
         schema: patch.clone(),
     };
+
+    let result = DataStoreOperations::update_component_definition(&*data_store, &id, &definition);
+    if !result.success {
+        let log_entry = LogEntry::new(
+            LogOperation::ComponentDefinitionPatch {
+                definition_id: id.clone(),
+                patch_data: patch,
+                result_definition: definition.clone(),
+            },
+            LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+        );
+        logger.log_or_error(&log_entry);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
 
     let log_entry = LogEntry::new(
         LogOperation::ComponentDefinitionPatch {
@@ -361,13 +468,27 @@ async fn patch_component_definition_by_id(
 }
 
 async fn delete_component_definition_by_id(
-    State((logger, _data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
+    let deleted_definition = data_store.get_component_definition(&id).ok().flatten();
+    let result = DataStoreOperations::delete_component_definition(&*data_store, &id);
+    if !result.success {
+        let log_entry = LogEntry::new(
+            LogOperation::ComponentDefinitionDelete {
+                definition_id: id.clone(),
+                deleted_definition,
+            },
+            LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+        );
+        logger.log_or_error(&log_entry);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
     let log_entry = LogEntry::new(
         LogOperation::ComponentDefinitionDelete {
             definition_id: id,
-            deleted_definition: None,
+            deleted_definition,
         },
         LogMetadata::rest_api(None),
     );
@@ -377,19 +498,24 @@ async fn delete_component_definition_by_id(
 }
 
 async fn get_components(
-    State((logger, _data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Query(_params): Query<HashMap<String, String>>,
 ) -> Result<Json<Vec<Value>>, StatusCode> {
+    let components = match data_store.list_components() {
+        Ok(comp_list) => comp_list.into_iter().map(|(_id, data)| data).collect(),
+        Err(_) => vec![],
+    };
+
     let log_entry = LogEntry::new(
         LogOperation::ComponentGet {
             component_id: None,
-            found: true,
+            found: !components.is_empty(),
         },
         LogMetadata::rest_api(None),
     );
     logger.log_or_error(&log_entry);
 
-    Ok(Json(vec![]))
+    Ok(Json(components))
 }
 
 async fn create_component(
@@ -439,9 +565,27 @@ async fn create_component(
         }
     };
 
+    let component_id = "generated_id".to_string();
+    let result = DataStoreOperations::create_component(&*data_store, &component_id, &component);
+    if !result.success {
+        let log_entry = LogEntry::new(
+            LogOperation::ComponentCreate {
+                component_id: component_id.clone(),
+                component_data: component.clone(),
+                validation_result,
+            },
+            LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+        );
+        logger.log_or_error(&log_entry);
+        return Err(match result.into_error() {
+            crate::DataStoreError::AlreadyExists => StatusCode::CONFLICT,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        });
+    }
+
     let log_entry = LogEntry::new(
         LogOperation::ComponentCreate {
-            component_id: "generated_id".to_string(),
+            component_id,
             component_data: component.clone(),
             validation_result,
         },
@@ -453,13 +597,30 @@ async fn create_component(
 }
 
 async fn update_component(
-    State((logger, _data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Json(component): Json<Value>,
 ) -> Result<Json<Value>, StatusCode> {
+    let component_id = "updated_id".to_string();
+    let old_data = data_store.get_component(&component_id).ok().flatten();
+    let result = DataStoreOperations::update_component(&*data_store, &component_id, &component);
+    if !result.success {
+        let log_entry = LogEntry::new(
+            LogOperation::ComponentUpdate {
+                component_id: component_id.clone(),
+                old_data,
+                new_data: component.clone(),
+                validation_result: None,
+            },
+            LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+        );
+        logger.log_or_error(&log_entry);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
     let log_entry = LogEntry::new(
         LogOperation::ComponentUpdate {
-            component_id: "updated_id".to_string(),
-            old_data: None,
+            component_id,
+            old_data,
             new_data: component.clone(),
             validation_result: None,
         },
@@ -471,12 +632,27 @@ async fn update_component(
 }
 
 async fn patch_component(
-    State((logger, _data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Json(patch): Json<Value>,
 ) -> Result<Json<Value>, StatusCode> {
+    let component_id = "patched_id".to_string();
+    let result = DataStoreOperations::update_component(&*data_store, &component_id, &patch);
+    if !result.success {
+        let log_entry = LogEntry::new(
+            LogOperation::ComponentPatch {
+                component_id: component_id.clone(),
+                patch_data: patch.clone(),
+                result_data: patch.clone(),
+            },
+            LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+        );
+        logger.log_or_error(&log_entry);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
     let log_entry = LogEntry::new(
         LogOperation::ComponentPatch {
-            component_id: "patched_id".to_string(),
+            component_id,
             patch_data: patch.clone(),
             result_data: patch.clone(),
         },
@@ -488,10 +664,22 @@ async fn patch_component(
 }
 
 async fn delete_components(
-    State((logger, _data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
 ) -> Result<StatusCode, StatusCode> {
+    let result = DataStoreOperations::delete_all_components(&*data_store);
+    let count_deleted = if result.success {
+        result.data.unwrap_or(0)
+    } else {
+        let log_entry = LogEntry::new(
+            LogOperation::ComponentDeleteAll { count_deleted: 0 },
+            LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+        );
+        logger.log_or_error(&log_entry);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    };
+
     let log_entry = LogEntry::new(
-        LogOperation::ComponentDeleteAll { count_deleted: 0 },
+        LogOperation::ComponentDeleteAll { count_deleted },
         LogMetadata::rest_api(None),
     );
     logger.log_or_error(&log_entry);
@@ -500,13 +688,23 @@ async fn delete_components(
 }
 
 async fn get_component_by_id(
-    State((logger, _data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, StatusCode> {
-    let component = serde_json::json!({
-        "id": id.clone(),
-        "data": {}
-    });
+    let component = match data_store.get_component(&id) {
+        Ok(Some(data)) => data,
+        Ok(None) | Err(_) => {
+            let log_entry = LogEntry::new(
+                LogOperation::ComponentGet {
+                    component_id: Some(id),
+                    found: false,
+                },
+                LogMetadata::rest_api(None),
+            );
+            logger.log_or_error(&log_entry);
+            return Err(StatusCode::NOT_FOUND);
+        }
+    };
 
     let log_entry = LogEntry::new(
         LogOperation::ComponentGet {
@@ -521,14 +719,30 @@ async fn get_component_by_id(
 }
 
 async fn update_component_by_id(
-    State((logger, _data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Path(id): Path<String>,
     Json(component): Json<Value>,
 ) -> Result<Json<Value>, StatusCode> {
+    let old_data = data_store.get_component(&id).ok().flatten();
+    let result = DataStoreOperations::update_component(&*data_store, &id, &component);
+    if !result.success {
+        let log_entry = LogEntry::new(
+            LogOperation::ComponentUpdate {
+                component_id: id.clone(),
+                old_data,
+                new_data: component.clone(),
+                validation_result: None,
+            },
+            LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+        );
+        logger.log_or_error(&log_entry);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
     let log_entry = LogEntry::new(
         LogOperation::ComponentUpdate {
             component_id: id,
-            old_data: None,
+            old_data,
             new_data: component.clone(),
             validation_result: None,
         },
@@ -540,13 +754,27 @@ async fn update_component_by_id(
 }
 
 async fn patch_component_by_id(
-    State((logger, _data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Path(id): Path<String>,
     Json(patch): Json<Value>,
 ) -> Result<Json<Value>, StatusCode> {
     let mut component = patch.clone();
     if let Some(obj) = component.as_object_mut() {
         obj.insert("id".to_string(), serde_json::Value::String(id.clone()));
+    }
+
+    let result = DataStoreOperations::update_component(&*data_store, &id, &component);
+    if !result.success {
+        let log_entry = LogEntry::new(
+            LogOperation::ComponentPatch {
+                component_id: id.clone(),
+                patch_data: patch,
+                result_data: component.clone(),
+            },
+            LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+        );
+        logger.log_or_error(&log_entry);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     let log_entry = LogEntry::new(
@@ -563,13 +791,27 @@ async fn patch_component_by_id(
 }
 
 async fn delete_component_by_id(
-    State((logger, _data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
+    let deleted_data = data_store.get_component(&id).ok().flatten();
+    let result = DataStoreOperations::delete_component(&*data_store, &id);
+    if !result.success {
+        let log_entry = LogEntry::new(
+            LogOperation::ComponentDelete {
+                component_id: id.clone(),
+                deleted_data,
+            },
+            LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+        );
+        logger.log_or_error(&log_entry);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
     let log_entry = LogEntry::new(
         LogOperation::ComponentDelete {
             component_id: id,
-            deleted_data: None,
+            deleted_data,
         },
         LogMetadata::rest_api(None),
     );
@@ -621,6 +863,9 @@ pub fn create_component_router(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::test_helpers::{
+        clear_log_file, create_test_logger_with_path, read_log_entries, test_data_store,
+    };
 
     #[test]
     fn valid_rust_identifier_simple() {
@@ -832,50 +1077,6 @@ mod tests {
         );
     }
 
-    // Helper functions for HTTP endpoint logging tests
-    fn read_log_entries(log_path: &std::path::Path) -> Vec<LogEntry> {
-        use std::fs;
-        if !log_path.exists() {
-            return vec![];
-        }
-
-        let contents = fs::read_to_string(log_path).unwrap_or_default();
-        contents
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(|line| serde_json::from_str::<LogEntry>(line).expect("Failed to parse log entry"))
-            .collect()
-    }
-
-    fn clear_log_file(log_path: &std::path::Path) {
-        use std::fs;
-        if log_path.exists() {
-            fs::remove_file(log_path).ok();
-        }
-    }
-
-    fn create_test_logger_with_path(suffix: &str) -> (Arc<DurableLogger>, std::path::PathBuf) {
-        use std::process;
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
-        let test_path = std::path::PathBuf::from(format!(
-            "test_component_logging_{}_{}_{}.jsonl",
-            process::id(),
-            timestamp,
-            suffix
-        ));
-        let logger = Arc::new(DurableLogger::new(test_path.clone()));
-        (logger, test_path)
-    }
-
-    fn test_data_store() -> Arc<dyn DataStore> {
-        use crate::InMemoryDataStore;
-        Arc::new(InMemoryDataStore::new())
-    }
-
     fn sample_component_definition() -> ComponentDefinition {
         ComponentDefinition {
             component: Component::new("TestComponent").unwrap(),
@@ -897,7 +1098,7 @@ mod tests {
     // Component Definition HTTP Endpoint Tests
     #[tokio::test]
     async fn get_component_definitions_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("get_definitions");
+        let (logger, log_path) = create_test_logger_with_path("component", "get_definitions");
         clear_log_file(&log_path);
 
         let params = HashMap::new();
@@ -921,7 +1122,7 @@ mod tests {
                 found,
             } => {
                 assert!(definition_id.is_none());
-                assert!(*found);
+                assert!(!*found);
             }
             _ => panic!("Expected ComponentDefinitionGet operation"),
         }
@@ -931,7 +1132,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_component_definition_success_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("create_def_success");
+        let (logger, log_path) = create_test_logger_with_path("component", "create_def_success");
         clear_log_file(&log_path);
 
         let definition = sample_component_definition();
@@ -967,7 +1168,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_component_definition_failure_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("create_def_failure");
+        let (logger, log_path) = create_test_logger_with_path("component", "create_def_failure");
         clear_log_file(&log_path);
 
         let definition = invalid_component_definition();
@@ -1004,7 +1205,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_component_definition_success_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("update_def_success");
+        let (logger, log_path) = create_test_logger_with_path("component", "update_def_success");
         clear_log_file(&log_path);
 
         let definition = sample_component_definition();
@@ -1045,7 +1246,7 @@ mod tests {
 
     #[tokio::test]
     async fn patch_component_definition_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("patch_def");
+        let (logger, log_path) = create_test_logger_with_path("component", "patch_def");
         clear_log_file(&log_path);
 
         let patch = serde_json::json!({"type": "number"});
@@ -1082,7 +1283,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_component_definitions_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("delete_defs");
+        let (logger, log_path) = create_test_logger_with_path("component", "delete_defs");
         clear_log_file(&log_path);
 
         let logs_before = read_log_entries(&log_path);
@@ -1110,7 +1311,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_component_definition_by_id_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("get_def_by_id");
+        let (logger, log_path) = create_test_logger_with_path("component", "get_def_by_id");
         clear_log_file(&log_path);
 
         let test_id = "test123".to_string();
@@ -1122,7 +1323,8 @@ mod tests {
             Path(test_id.clone()),
         )
         .await;
-        assert!(result.is_ok());
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), StatusCode::NOT_FOUND);
 
         let logs_after = read_log_entries(&log_path);
         assert_eq!(logs_after.len(), 1);
@@ -1137,7 +1339,7 @@ mod tests {
                 found,
             } => {
                 assert_eq!(*definition_id, Some(test_id));
-                assert!(*found);
+                assert!(!*found);
             }
             _ => panic!("Expected ComponentDefinitionGet operation"),
         }
@@ -1147,7 +1349,8 @@ mod tests {
 
     #[tokio::test]
     async fn update_component_definition_by_id_success_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("update_def_by_id_success");
+        let (logger, log_path) =
+            create_test_logger_with_path("component", "update_def_by_id_success");
         clear_log_file(&log_path);
 
         let test_id = "test456".to_string();
@@ -1190,7 +1393,7 @@ mod tests {
 
     #[tokio::test]
     async fn patch_component_definition_by_id_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("patch_def_by_id");
+        let (logger, log_path) = create_test_logger_with_path("component", "patch_def_by_id");
         clear_log_file(&log_path);
 
         let test_id = "test789".to_string();
@@ -1231,7 +1434,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_component_definition_by_id_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("delete_def_by_id");
+        let (logger, log_path) = create_test_logger_with_path("component", "delete_def_by_id");
         clear_log_file(&log_path);
 
         let test_id = "test_delete".to_string();
@@ -1269,7 +1472,7 @@ mod tests {
     // Component Instance HTTP Endpoint Tests
     #[tokio::test]
     async fn get_components_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("get_components");
+        let (logger, log_path) = create_test_logger_with_path("component", "get_components");
         clear_log_file(&log_path);
 
         let params = HashMap::new();
@@ -1293,7 +1496,7 @@ mod tests {
                 found,
             } => {
                 assert!(component_id.is_none());
-                assert!(*found);
+                assert!(!*found);
             }
             _ => panic!("Expected ComponentGet operation"),
         }
@@ -1303,7 +1506,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_component_success_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("create_comp_success");
+        let (logger, log_path) = create_test_logger_with_path("component", "create_comp_success");
         clear_log_file(&log_path);
 
         let component_data = serde_json::json!("Red");
@@ -1342,7 +1545,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_component_failure_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("create_comp_failure");
+        let (logger, log_path) = create_test_logger_with_path("component", "create_comp_failure");
         clear_log_file(&log_path);
 
         let component_data = serde_json::json!("InvalidColor");
@@ -1382,7 +1585,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_component_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("update_comp");
+        let (logger, log_path) = create_test_logger_with_path("component", "update_comp");
         clear_log_file(&log_path);
 
         let component_data = serde_json::json!({"color": "blue"});
@@ -1423,7 +1626,7 @@ mod tests {
 
     #[tokio::test]
     async fn patch_component_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("patch_comp");
+        let (logger, log_path) = create_test_logger_with_path("component", "patch_comp");
         clear_log_file(&log_path);
 
         let patch_data = serde_json::json!({"size": "large"});
@@ -1459,7 +1662,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_components_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("delete_comps");
+        let (logger, log_path) = create_test_logger_with_path("component", "delete_comps");
         clear_log_file(&log_path);
 
         let logs_before = read_log_entries(&log_path);
@@ -1487,7 +1690,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_component_by_id_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("get_comp_by_id");
+        let (logger, log_path) = create_test_logger_with_path("component", "get_comp_by_id");
         clear_log_file(&log_path);
 
         let test_id = "comp123".to_string();
@@ -1496,7 +1699,8 @@ mod tests {
 
         let result =
             get_component_by_id(State((logger, test_data_store())), Path(test_id.clone())).await;
-        assert!(result.is_ok());
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), StatusCode::NOT_FOUND);
 
         let logs_after = read_log_entries(&log_path);
         assert_eq!(logs_after.len(), 1);
@@ -1511,7 +1715,7 @@ mod tests {
                 found,
             } => {
                 assert_eq!(*component_id, Some(test_id));
-                assert!(*found);
+                assert!(!*found);
             }
             _ => panic!("Expected ComponentGet operation"),
         }
@@ -1521,7 +1725,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_component_by_id_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("update_comp_by_id");
+        let (logger, log_path) = create_test_logger_with_path("component", "update_comp_by_id");
         clear_log_file(&log_path);
 
         let test_id = "comp456".to_string();
@@ -1564,7 +1768,7 @@ mod tests {
 
     #[tokio::test]
     async fn patch_component_by_id_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("patch_comp_by_id");
+        let (logger, log_path) = create_test_logger_with_path("component", "patch_comp_by_id");
         clear_log_file(&log_path);
 
         let test_id = "comp789".to_string();
@@ -1612,7 +1816,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_component_by_id_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("delete_comp_by_id");
+        let (logger, log_path) = create_test_logger_with_path("component", "delete_comp_by_id");
         clear_log_file(&log_path);
 
         let test_id = "comp_delete".to_string();

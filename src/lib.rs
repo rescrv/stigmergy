@@ -1,11 +1,14 @@
 mod component;
+mod data_operations;
 mod data_store;
 mod entity;
 mod json_schema;
 mod log_entry;
+mod test_utils;
 mod validate;
 
 pub use component::{Component, ComponentDefinition, create_component_router};
+pub use data_operations::{DataStoreOperations, OperationResult};
 pub use data_store::{DataStore, DataStoreError, InMemoryDataStore};
 pub use entity::{Entity, EntityParseError, create_entity_router};
 pub use json_schema::JsonSchema;

@@ -5,7 +5,7 @@ use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 
-use crate::{ComponentDefinition, DataStore, DataStoreError, Entity};
+use crate::{ComponentDefinition, DataStore, DataStoreOperations, Entity, data_operations};
 
 /// Comprehensive logging system for all state transitions in the stigmergy system.
 ///
@@ -506,27 +506,36 @@ impl DurableLogger {
     ) -> Result<(), Box<dyn std::error::Error>> {
         match &entry.operation {
             LogOperation::EntityCreate { entity, .. } => {
-                // Ignore AlreadyExists errors as the entity might already be in the store
-                if let Err(DataStoreError::AlreadyExists) = data_store.create_entity(entity) {
-                    // Entity already exists, that's fine for replay
+                // Create entity - AlreadyExists is ok for replay, other errors fail
+                let result = data_operations::replay::create_entity(data_store, entity);
+                if !result.success {
+                    // This is a real error (not AlreadyExists), so fail the replay
+                    return Err(result.into_error().into());
                 }
+                // result.data indicates if entity was created (true) or already existed (false)
+                // Both are acceptable for replay
                 Ok(())
             }
 
             LogOperation::EntityDelete { entity_id, success } => {
                 if *success {
-                    data_store.delete_entity(entity_id)?;
+                    let result = DataStoreOperations::delete_entity(data_store, entity_id);
+                    if !result.success {
+                        return Err(result.into_error().into());
+                    }
                 }
                 Ok(())
             }
 
             LogOperation::ComponentDefinitionCreate { definition, .. } => {
                 let def_id = format!("{:?}", definition.component);
-                // Ignore AlreadyExists errors
-                if let Err(DataStoreError::AlreadyExists) =
-                    data_store.create_component_definition(&def_id, definition)
-                {
-                    // Definition already exists, that's fine for replay
+                // Create component definition - AlreadyExists is ok for replay, other errors fail
+                let result = data_operations::replay::create_component_definition(
+                    data_store, &def_id, definition,
+                );
+                if !result.success {
+                    // This is a real error (not AlreadyExists), so fail the replay
+                    return Err(result.into_error().into());
                 }
                 Ok(())
             }
@@ -536,17 +545,31 @@ impl DurableLogger {
                 new_definition,
                 ..
             } => {
-                data_store.update_component_definition(definition_id, new_definition)?;
+                let result = DataStoreOperations::update_component_definition(
+                    data_store,
+                    definition_id,
+                    new_definition,
+                );
+                if !result.success {
+                    return Err(result.into_error().into());
+                }
                 Ok(())
             }
 
             LogOperation::ComponentDefinitionDelete { definition_id, .. } => {
-                data_store.delete_component_definition(definition_id)?;
+                let result =
+                    DataStoreOperations::delete_component_definition(data_store, definition_id);
+                if !result.success {
+                    return Err(result.into_error().into());
+                }
                 Ok(())
             }
 
             LogOperation::ComponentDefinitionDeleteAll { .. } => {
-                data_store.delete_all_component_definitions()?;
+                let result = DataStoreOperations::delete_all_component_definitions(data_store);
+                if !result.success {
+                    return Err(result.into_error().into());
+                }
                 Ok(())
             }
 
@@ -555,11 +578,15 @@ impl DurableLogger {
                 component_data,
                 ..
             } => {
-                // Ignore AlreadyExists errors
-                if let Err(DataStoreError::AlreadyExists) =
-                    data_store.create_component(component_id, component_data)
-                {
-                    // Component already exists, that's fine for replay
+                // Create component - AlreadyExists is ok for replay, other errors fail
+                let result = data_operations::replay::create_component(
+                    data_store,
+                    component_id,
+                    component_data,
+                );
+                if !result.success {
+                    // This is a real error (not AlreadyExists), so fail the replay
+                    return Err(result.into_error().into());
                 }
                 Ok(())
             }
@@ -569,17 +596,27 @@ impl DurableLogger {
                 new_data,
                 ..
             } => {
-                data_store.update_component(component_id, new_data)?;
+                let result =
+                    DataStoreOperations::update_component(data_store, component_id, new_data);
+                if !result.success {
+                    return Err(result.into_error().into());
+                }
                 Ok(())
             }
 
             LogOperation::ComponentDelete { component_id, .. } => {
-                data_store.delete_component(component_id)?;
+                let result = DataStoreOperations::delete_component(data_store, component_id);
+                if !result.success {
+                    return Err(result.into_error().into());
+                }
                 Ok(())
             }
 
             LogOperation::ComponentDeleteAll { .. } => {
-                data_store.delete_all_components()?;
+                let result = DataStoreOperations::delete_all_components(data_store);
+                if !result.success {
+                    return Err(result.into_error().into());
+                }
                 Ok(())
             }
 
@@ -588,7 +625,14 @@ impl DurableLogger {
                 result_definition,
                 ..
             } => {
-                data_store.update_component_definition(definition_id, result_definition)?;
+                let result = DataStoreOperations::update_component_definition(
+                    data_store,
+                    definition_id,
+                    result_definition,
+                );
+                if !result.success {
+                    return Err(result.into_error().into());
+                }
                 Ok(())
             }
 
@@ -597,7 +641,11 @@ impl DurableLogger {
                 result_data,
                 ..
             } => {
-                data_store.update_component(component_id, result_data)?;
+                let result =
+                    DataStoreOperations::update_component(data_store, component_id, result_data);
+                if !result.success {
+                    return Err(result.into_error().into());
+                }
                 Ok(())
             }
 
