@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 372748215fd5b86b9f71b0133a50e3afa4532099c5a3cb98970836c7c1dd2885 # shrinks to entity_request = CreateEntityRequest { entity: Some(Entity([0, 0, 0, 0, 0, 90, 83, 223, 194, 157, 185, 201, 143, 91, 197, 160, 186, 120, 225, 28, 102, 35, 138, 175, 67, 73, 56, 61, 24, 22, 147, 130])) }, definition = ComponentDefinition { component: Component("jm00_nTe_l8AqsTiTaC8smPwUUS"), schema: Object {"type": String("string")} }
