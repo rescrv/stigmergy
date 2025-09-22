@@ -34,6 +34,19 @@ impl Component {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CreateComponentRequest {
+    pub component: Component,
+    pub data: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CreateComponentResponse {
+    pub entity: Entity,
+    pub component: Component,
+    pub data: Value,
+}
+
 fn is_valid_rust_identifier(s: &str) -> bool {
     if s.is_empty() {
         return false;
@@ -558,8 +571,8 @@ async fn get_all_components(
 async fn create_component_for_entity(
     State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Path(entity_id): Path<String>,
-    Json(component): Json<Value>,
-) -> Result<Json<Value>, StatusCode> {
+    Json(request): Json<CreateComponentRequest>,
+) -> Result<Json<CreateComponentResponse>, StatusCode> {
     // Parse entity ID (prepend "entity:" prefix to base64 part from URL)
     let full_entity_id = format!("entity:{}", entity_id);
     let entity: Entity = match full_entity_id.parse() {
@@ -594,14 +607,14 @@ async fn create_component_for_entity(
         }
     };
 
-    let validation_result = match validate_value(&component, &validation_schema) {
+    let validation_result = match validate_value(&request.data, &validation_schema) {
         Ok(()) => Some(LogValidationResult::success()),
         Err(e) => {
             let log_entry = LogEntry::new(
                 LogOperation::ComponentCreate {
                     entity_id: entity_id.clone(),
                     component_id: "generated_id".to_string(),
-                    component_data: component.clone(),
+                    component_data: request.data.clone(),
                     validation_result: Some(LogValidationResult::failed(e.to_string())),
                 },
                 LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
@@ -613,13 +626,13 @@ async fn create_component_for_entity(
 
     let component_id = "generated_id".to_string();
     let result =
-        DataStoreOperations::create_component(&*data_store, &entity, &component_id, &component);
+        DataStoreOperations::create_component(&*data_store, &entity, &component_id, &request.data);
     if !result.success {
         let log_entry = LogEntry::new(
             LogOperation::ComponentCreate {
                 entity_id: entity_id.clone(),
                 component_id: component_id.clone(),
-                component_data: component.clone(),
+                component_data: request.data.clone(),
                 validation_result,
             },
             LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
@@ -636,14 +649,20 @@ async fn create_component_for_entity(
         LogOperation::ComponentCreate {
             entity_id,
             component_id,
-            component_data: component.clone(),
+            component_data: request.data.clone(),
             validation_result,
         },
         LogMetadata::rest_api(None),
     );
     logger.log_or_error(&log_entry);
 
-    Ok(Json(component))
+    let response = CreateComponentResponse {
+        entity,
+        component: request.component,
+        data: request.data,
+    };
+
+    Ok(Json(response))
 }
 
 async fn update_component_for_entity(
@@ -1653,10 +1672,15 @@ mod tests {
         // Create the entity first
         data_store.create_entity(&entity).unwrap();
 
+        let request = CreateComponentRequest {
+            component: Component::new("TestComponent").unwrap(),
+            data: component_data.clone(),
+        };
+
         let result = create_component_for_entity(
             State((logger, data_store)),
             Path(entity.to_string()[7..].to_string()),
-            Json(component_data.clone()),
+            Json(request),
         )
         .await;
         assert!(result.is_ok());
@@ -1695,10 +1719,15 @@ mod tests {
         assert!(logs_before.is_empty());
 
         let entity = Entity::random().unwrap();
+        let request = CreateComponentRequest {
+            component: Component::new("TestComponent").unwrap(),
+            data: component_data.clone(),
+        };
+
         let result = create_component_for_entity(
             State((logger, test_data_store())),
             Path(entity.to_string()[7..].to_string()),
-            Json(component_data.clone()),
+            Json(request),
         )
         .await;
         assert!(result.is_err());
@@ -2075,10 +2104,15 @@ mod tests {
             .unwrap();
 
         // Try to create again - should get CONFLICT
+        let request = CreateComponentRequest {
+            component: Component::new("TestComponent").unwrap(),
+            data: component_data.clone(),
+        };
+
         let result = create_component_for_entity(
             State((logger.clone(), data_store.clone())),
             Path(entity.to_string()[7..].to_string()),
-            Json(component_data.clone()),
+            Json(request),
         )
         .await;
         assert!(result.is_err());
@@ -2159,10 +2193,15 @@ mod tests {
             "age": 30,
             "active": true
         });
+        let request = CreateComponentRequest {
+            component: Component::new("TestComponent").unwrap(),
+            data: valid_data.clone(),
+        };
+
         let result = create_component_for_entity(
             State((logger.clone(), data_store.clone())),
             Path(entity_id),
-            Json(valid_data.clone()),
+            Json(request),
         )
         .await;
         assert!(result.is_ok());

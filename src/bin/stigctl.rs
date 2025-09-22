@@ -6,8 +6,9 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use stigmergy::{
-    ComponentDefinition, CreateEntityRequest, CreateEntityResponse, Entity, LogEntry, LogOperation,
-    cli_utils, component_utils, http_utils,
+    Component, ComponentDefinition, CreateComponentRequest, CreateComponentResponse,
+    CreateEntityRequest, CreateEntityResponse, Entity, LogEntry, LogOperation, cli_utils,
+    component_utils, http_utils,
 };
 
 #[derive(CommandLine, Default, PartialEq, Eq)]
@@ -28,7 +29,7 @@ Commands:
   componentdefinition get <id>                 Get a component definition by ID
   componentdefinition update <id> <schema>     Update a component definition
   componentdefinition delete <id>              Delete a component definition
-  component create <entity-id> <data>          Create a component instance for an entity
+  component create <entity> <component> <data> Create a component instance for an entity
   component list <entity-id>                   List all component instances for an entity
   component get <entity-id> <comp-id>          Get a component instance by ID for an entity
   component update <entity-id> <comp-id> <data> Update a component instance for an entity
@@ -281,28 +282,38 @@ Example: stigctl componentdefinition create MyComponent '{"type":"object","prope
 async fn handle_component_command(args: &[String], client: &http_utils::StigmergyClient) {
     match args[0].as_str() {
         "create" => {
-            if args.len() < 3 {
+            if args.len() < 4 {
                 cli_utils::exit_with_usage_error(
-                    "create command requires entity-id and data",
-                    r#"Usage: stigctl component create <entity-id> <data-json>
-Example: stigctl component create entity:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA '{"value":"hello"}'"#,
+                    "create command requires entity, component, and data",
+                    r#"Usage: stigctl component create <entity> <component> <data-json>
+Example: stigctl component create entity:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA MyComponent '{"value":"hello"}'"#,
                 );
             }
 
             let entity_id = &args[1];
-            let data_str = &args[2];
+            let component_name = &args[2];
+            let data_str = &args[3];
             let data = component_utils::parse_json_data(data_str)
                 .unwrap_or_else(|e| cli_utils::exit_with_error(&e));
 
-            let path = format!("entity/{}/component", entity_id);
-            let component = http_utils::execute_or_exit(
-                || client.post::<Value, Value>(&path, &data),
+            // Create component instance from name
+            let component = Component::new(component_name).unwrap_or_else(|| {
+                cli_utils::exit_with_error(&format!("Invalid component name: {}", component_name))
+            });
+
+            let request = CreateComponentRequest { component, data };
+
+            // Extract base64 part (skip "entity:" prefix) for URL path
+            let base64_part = &entity_id[7..]; // Skip "entity:" prefix
+            let path = format!("entity/{}/component", base64_part);
+            let response = http_utils::execute_or_exit(
+                || client.post::<CreateComponentRequest, CreateComponentResponse>(&path, &request),
                 "Failed to create component",
             )
             .await;
 
             println!("Created component:");
-            cli_utils::print_json_or_exit(&component, "component");
+            cli_utils::print_json_or_exit(&response, "component");
         }
         "list" => {
             if args.len() < 2 {
