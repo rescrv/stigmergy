@@ -13,8 +13,8 @@ pub mod component_utils;
 pub mod http_utils;
 
 pub use component::{
-    Component, ComponentDefinition, CreateComponentRequest, CreateComponentResponse,
-    create_component_router,
+    Component, ComponentDefinition, ComponentListItem, CreateComponentRequest,
+    CreateComponentResponse, create_component_router,
 };
 pub use data_operations::{DataStoreOperations, OperationResult};
 pub use data_store::{ComponentList, DataStore, DataStoreError, InMemoryDataStore};

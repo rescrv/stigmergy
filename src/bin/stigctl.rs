@@ -6,9 +6,9 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use stigmergy::{
-    Component, ComponentDefinition, CreateComponentRequest, CreateComponentResponse,
-    CreateEntityRequest, CreateEntityResponse, Entity, LogEntry, LogOperation, cli_utils,
-    component_utils, http_utils,
+    Component, ComponentDefinition, ComponentListItem, CreateComponentRequest,
+    CreateComponentResponse, CreateEntityRequest, CreateEntityResponse, Entity, LogEntry,
+    LogOperation, cli_utils, component_utils, http_utils,
 };
 
 #[derive(CommandLine, Default, PartialEq, Eq)]
@@ -324,9 +324,11 @@ Example: stigctl component create entity:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             }
 
             let entity_id = &args[1];
-            let path = format!("entity/{}/component", entity_id);
+            // Extract base64 part (skip "entity:" prefix) for URL path
+            let base64_part = &entity_id[7..]; // Skip "entity:" prefix
+            let path = format!("entity/{}/component", base64_part);
             let components = http_utils::execute_or_exit(
-                || client.get::<Vec<Value>>(&path),
+                || client.get::<Vec<ComponentListItem>>(&path),
                 "Failed to list components",
             )
             .await;
@@ -343,7 +345,9 @@ Example: stigctl component create entity:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 
             let entity_id = &args[1];
             let comp_id = &args[2];
-            let path = format!("entity/{}/component/{}", entity_id, comp_id);
+            // Extract base64 part (skip "entity:" prefix) for URL path
+            let base64_part = &entity_id[7..]; // Skip "entity:" prefix
+            let path = format!("entity/{}/component/{}", base64_part, comp_id);
             let error_msg = format!(
                 "Failed to get component {} for entity {}",
                 comp_id, entity_id
@@ -367,7 +371,9 @@ Example: stigctl component create entity:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             let data = component_utils::parse_json_data(data_str)
                 .unwrap_or_else(|e| cli_utils::exit_with_error(&e));
 
-            let path = format!("entity/{}/component/{}", entity_id, comp_id);
+            // Extract base64 part (skip "entity:" prefix) for URL path
+            let base64_part = &entity_id[7..]; // Skip "entity:" prefix
+            let path = format!("entity/{}/component/{}", base64_part, comp_id);
             let error_msg = format!(
                 "Failed to update component {} for entity {}",
                 comp_id, entity_id
@@ -391,7 +397,9 @@ Example: stigctl component create entity:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 
             let entity_id = &args[1];
             let comp_id = &args[2];
-            let path = format!("entity/{}/component/{}", entity_id, comp_id);
+            // Extract base64 part (skip "entity:" prefix) for URL path
+            let base64_part = &entity_id[7..]; // Skip "entity:" prefix
+            let path = format!("entity/{}/component/{}", base64_part, comp_id);
             let error_msg = format!(
                 "Failed to delete component {} for entity {}",
                 comp_id, entity_id

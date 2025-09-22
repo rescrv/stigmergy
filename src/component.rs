@@ -47,6 +47,12 @@ pub struct CreateComponentResponse {
     pub data: Value,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ComponentListItem {
+    pub component: Component,
+    pub data: Value,
+}
+
 fn is_valid_rust_identifier(s: &str) -> bool {
     if s.is_empty() {
         return false;
@@ -518,7 +524,7 @@ async fn get_components_for_entity(
     State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Path(entity_id): Path<String>,
     Query(_params): Query<HashMap<String, String>>,
-) -> Result<Json<Vec<Value>>, StatusCode> {
+) -> Result<Json<Vec<ComponentListItem>>, StatusCode> {
     // Parse entity ID (prepend "entity:" prefix to base64 part from URL)
     let full_entity_id = format!("entity:{}", entity_id);
     let entity: Entity = match full_entity_id.parse() {
@@ -527,7 +533,13 @@ async fn get_components_for_entity(
     };
 
     let components = match data_store.list_components_for_entity(&entity) {
-        Ok(comp_list) => comp_list.into_iter().map(|(_id, data)| data).collect(),
+        Ok(comp_list) => comp_list
+            .into_iter()
+            .filter_map(|(component_name, data)| {
+                Component::new(&component_name)
+                    .map(|component| ComponentListItem { component, data })
+            })
+            .collect(),
         Err(_) => vec![],
     };
 
@@ -624,7 +636,7 @@ async fn create_component_for_entity(
         }
     };
 
-    let component_id = "generated_id".to_string();
+    let component_id = request.component.as_str().to_string();
     let result =
         DataStoreOperations::create_component(&*data_store, &entity, &component_id, &request.data);
     if !result.success {
@@ -1699,7 +1711,7 @@ mod tests {
                 component_data: logged_data,
                 validation_result,
             } => {
-                assert_eq!(*component_id, "generated_id");
+                assert_eq!(*component_id, "TestComponent");
                 assert_eq!(*logged_data, component_data);
                 assert!(validation_result.as_ref().unwrap().is_success());
             }
