@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::PathBuf;
 use std::process;
 use std::sync::Arc;
@@ -19,6 +20,7 @@ pub struct ApiTestServer {
     pub server: TestServer,
     pub data_store: Arc<InMemoryDataStore>,
     pub logger: Arc<DurableLogger>,
+    pub log_path: PathBuf,
 }
 
 impl Default for ApiTestServer {
@@ -37,7 +39,7 @@ impl ApiTestServer {
         let pid = process::id();
         let log_path = PathBuf::from(format!("prop_test_{}_{}.jsonl", pid, timestamp));
 
-        let logger = Arc::new(DurableLogger::new(log_path));
+        let logger = Arc::new(DurableLogger::new(log_path.clone()));
         let data_store = Arc::new(InMemoryDataStore::new());
 
         let app = Router::new()
@@ -56,6 +58,18 @@ impl ApiTestServer {
             server,
             data_store: data_store.clone(),
             logger,
+            log_path,
+        }
+    }
+}
+
+impl Drop for ApiTestServer {
+    fn drop(&mut self) {
+        if let Err(e) = fs::remove_file(&self.log_path) {
+            eprintln!(
+                "Warning: failed to cleanup test log file {:?}: {}",
+                self.log_path, e
+            );
         }
     }
 }
@@ -324,7 +338,7 @@ proptest! {
             // Create component for entity using the pre-generated matching data
             let component_request = CreateComponentRequest {
                 component: definition.component.clone(),
-                data: data
+                data,
             };
 
             let entity_str = entity.entity.to_string();

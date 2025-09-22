@@ -2109,27 +2109,26 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn data_store_error_handling_component() {
         let (logger, log_path) = create_test_logger_with_path("component", "data_store_error_comp");
         clear_log_file(&log_path);
 
         let component_data = serde_json::json!("Green");
         let data_store = test_data_store();
-        let comp_id = "generated_id";
+        let test_component = Component::new("TestComponent").unwrap();
 
         // Create an entity first
         let entity = Entity::random().unwrap();
         data_store.create_entity(&entity).unwrap();
 
-        // Create component first
+        // Create component first (directly in data store)
         data_store
-            .create_component(&entity, comp_id, &component_data)
+            .create_component(&entity, test_component.as_str(), &component_data)
             .unwrap();
 
-        // Try to create again - should get CONFLICT
+        // Try to create again via HTTP handler - should get CONFLICT
         let request = CreateComponentRequest {
-            component: Component::new("TestComponent").unwrap(),
+            component: test_component,
             data: component_data.clone(),
         };
 

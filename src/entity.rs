@@ -618,17 +618,18 @@ mod tests {
         clear_log_file, create_test_logger_with_path, read_log_entries, test_data_store,
     };
     use axum::extract::State;
+    use std::path::PathBuf;
 
-    fn test_logger() -> Arc<DurableLogger> {
-        use std::path::PathBuf;
+    fn test_logger() -> (Arc<DurableLogger>, PathBuf) {
         use std::process;
         use std::time::{SystemTime, UNIX_EPOCH};
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_millis();
-        let test_path = format!("test_entity_{}_{}.jsonl", process::id(), timestamp);
-        Arc::new(DurableLogger::new(PathBuf::from(test_path)))
+        let test_path = PathBuf::from(format!("test_entity_{}_{}.jsonl", process::id(), timestamp));
+        let logger = Arc::new(DurableLogger::new(test_path.clone()));
+        (logger, test_path)
     }
 
     #[test]
@@ -790,7 +791,7 @@ mod tests {
             entity: Some(test_entity),
         };
 
-        let logger = test_logger();
+        let (logger, log_path) = test_logger();
         let data_store = test_data_store();
         let response = create_entity(State((logger, data_store)), Json(request))
             .await
@@ -798,13 +799,14 @@ mod tests {
 
         assert_eq!(response.0.entity, test_entity);
         assert!(response.0.created);
+        clear_log_file(&log_path);
     }
 
     #[tokio::test]
     async fn create_entity_generates_random_when_none() {
         let request = CreateEntityRequest { entity: None };
 
-        let logger = test_logger();
+        let (logger, log_path) = test_logger();
         let data_store = test_data_store();
         let response = create_entity(State((logger, data_store)), Json(request)).await;
 
@@ -814,17 +816,20 @@ mod tests {
         assert!(response.0.created);
         // The entity should be randomly generated (not all zeros)
         assert_ne!(response.0.entity, Entity::new([0u8; 32]));
+        clear_log_file(&log_path);
     }
 
     #[tokio::test]
     async fn create_entity_avoids_special_characters() {
         // Generate multiple random entities and verify none contain - or _
+        let (logger, log_path) = test_logger();
+        let data_store = test_data_store();
+
         for _ in 0..1000 {
             let request = CreateEntityRequest { entity: None };
 
-            let logger = test_logger();
-            let data_store = test_data_store();
-            let response = create_entity(State((logger, data_store)), Json(request)).await;
+            let response =
+                create_entity(State((logger.clone(), data_store.clone())), Json(request)).await;
 
             // Must succeed - if /dev/urandom is not available, fail the test
             let response =
@@ -855,6 +860,7 @@ mod tests {
                 );
             }
         }
+        clear_log_file(&log_path);
     }
 
     #[tokio::test]
@@ -864,7 +870,7 @@ mod tests {
         // Extract just the base64 part after "entity:"
         let base64_part = entity_str.strip_prefix(ENTITY_PREFIX).unwrap();
 
-        let logger = test_logger();
+        let (logger, log_path) = test_logger();
         let data_store = test_data_store();
 
         // First create the entity in the data store
@@ -874,13 +880,14 @@ mod tests {
             delete_entity(State((logger, data_store)), Path(base64_part.to_string())).await;
 
         assert_eq!(result, Ok(StatusCode::NO_CONTENT));
+        clear_log_file(&log_path);
     }
 
     #[tokio::test]
     async fn delete_entity_invalid_id() {
         let invalid_base64 = "invalid_entity_id".to_string();
 
-        let logger = test_logger();
+        let (logger, log_path) = test_logger();
         let data_store = test_data_store();
         let result = delete_entity(
             State((logger, data_store)),
@@ -889,6 +896,7 @@ mod tests {
         .await;
 
         assert_eq!(result, Err((StatusCode::BAD_REQUEST, "invalid entity id")));
+        clear_log_file(&log_path);
     }
 
     #[tokio::test]
