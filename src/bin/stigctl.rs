@@ -6,7 +6,8 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use stigmergy::{
-    ComponentDefinition, Entity, LogEntry, LogOperation, cli_utils, component_utils, http_utils,
+    ComponentDefinition, CreateEntityRequest, CreateEntityResponse, Entity, LogEntry, LogOperation,
+    cli_utils, component_utils, http_utils,
 };
 
 #[derive(CommandLine, Default, PartialEq, Eq)]
@@ -106,12 +107,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn handle_entity_command(args: &[String], client: &http_utils::StigmergyClient) {
     match args[0].as_str() {
         "create" => {
-            let entity = http_utils::execute_or_exit(
-                || client.post_empty::<Entity>("entity"),
+            // Create request for random entity generation
+            let request = CreateEntityRequest { entity: None };
+
+            let response = http_utils::execute_or_exit(
+                || client.post::<CreateEntityRequest, CreateEntityResponse>("entity", &request),
                 "Failed to create entity",
             )
             .await;
-            println!("Created entity: {}", entity);
+
+            println!("Created entity: {}", response.entity);
         }
         "delete" => {
             if args.len() < 2 {
