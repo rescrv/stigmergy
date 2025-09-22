@@ -105,37 +105,51 @@ impl DataStoreOperations {
         }
     }
 
-    /// Create a component instance in the data store
+    /// Create a component instance in the data store (entity-scoped)
     pub fn create_component(
         data_store: &dyn DataStore,
+        entity: &Entity,
         component_id: &str,
         data: &Value,
     ) -> OperationResult<()> {
-        match data_store.create_component(component_id, data) {
+        match data_store.create_component(entity, component_id, data) {
             Ok(()) => OperationResult::success_void(),
             Err(e) => OperationResult::failure(e),
         }
     }
 
-    /// Update a component instance in the data store
+    /// Update a component instance in the data store (entity-scoped)
     pub fn update_component(
         data_store: &dyn DataStore,
+        entity: &Entity,
         component_id: &str,
         data: &Value,
     ) -> OperationResult<bool> {
-        match data_store.update_component(component_id, data) {
+        match data_store.update_component(entity, component_id, data) {
             Ok(updated) => OperationResult::success(updated),
             Err(e) => OperationResult::failure(e),
         }
     }
 
-    /// Delete a component instance from the data store
+    /// Delete a component instance from the data store (entity-scoped)
     pub fn delete_component(
         data_store: &dyn DataStore,
+        entity: &Entity,
         component_id: &str,
     ) -> OperationResult<bool> {
-        match data_store.delete_component(component_id) {
+        match data_store.delete_component(entity, component_id) {
             Ok(deleted) => OperationResult::success(deleted),
+            Err(e) => OperationResult::failure(e),
+        }
+    }
+
+    /// Delete all components for a specific entity
+    pub fn delete_all_components_for_entity(
+        data_store: &dyn DataStore,
+        entity: &Entity,
+    ) -> OperationResult<u32> {
+        match data_store.delete_all_components_for_entity(entity) {
+            Ok(count) => OperationResult::success(count),
             Err(e) => OperationResult::failure(e),
         }
     }
@@ -176,10 +190,11 @@ pub mod replay {
 
     pub fn create_component(
         data_store: &dyn DataStore,
+        entity: &Entity,
         component_id: &str,
         data: &Value,
     ) -> OperationResult<bool> {
-        match data_store.create_component(component_id, data) {
+        match data_store.create_component(entity, component_id, data) {
             Ok(()) => OperationResult::success(true), // Created new
             Err(DataStoreError::AlreadyExists) => OperationResult::success(false), // Already existed
             Err(e) => OperationResult::failure(e),                                 // Real error

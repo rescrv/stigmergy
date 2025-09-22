@@ -4,6 +4,9 @@ use std::sync::Mutex;
 
 use crate::{ComponentDefinition, Entity};
 
+/// Type alias for component key-value pairs returned by list operations
+pub type ComponentList = Vec<((Entity, String), Value)>;
+
 /// Trait for data store operations
 pub trait DataStore: Send + Sync {
     // Entity operations
@@ -33,13 +36,28 @@ pub trait DataStore: Send + Sync {
         &self,
     ) -> Result<Vec<(String, ComponentDefinition)>, DataStoreError>;
 
-    // Component Instance operations
-    fn create_component(&self, id: &str, data: &Value) -> Result<(), DataStoreError>;
-    fn get_component(&self, id: &str) -> Result<Option<Value>, DataStoreError>;
-    fn update_component(&self, id: &str, data: &Value) -> Result<bool, DataStoreError>;
-    fn delete_component(&self, id: &str) -> Result<bool, DataStoreError>;
+    // Component Instance operations - now entity-scoped
+    fn create_component(
+        &self,
+        entity: &Entity,
+        id: &str,
+        data: &Value,
+    ) -> Result<(), DataStoreError>;
+    fn get_component(&self, entity: &Entity, id: &str) -> Result<Option<Value>, DataStoreError>;
+    fn update_component(
+        &self,
+        entity: &Entity,
+        id: &str,
+        data: &Value,
+    ) -> Result<bool, DataStoreError>;
+    fn delete_component(&self, entity: &Entity, id: &str) -> Result<bool, DataStoreError>;
+    fn delete_all_components_for_entity(&self, entity: &Entity) -> Result<u32, DataStoreError>;
     fn delete_all_components(&self) -> Result<u32, DataStoreError>;
-    fn list_components(&self) -> Result<Vec<(String, Value)>, DataStoreError>;
+    fn list_components_for_entity(
+        &self,
+        entity: &Entity,
+    ) -> Result<Vec<(String, Value)>, DataStoreError>;
+    fn list_components(&self) -> Result<ComponentList, DataStoreError>;
 }
 
 /// Errors that can occur during data store operations
@@ -70,7 +88,7 @@ impl std::error::Error for DataStoreError {}
 pub struct InMemoryDataStore {
     entities: Mutex<HashMap<String, Entity>>,
     component_definitions: Mutex<HashMap<String, ComponentDefinition>>,
-    components: Mutex<HashMap<String, Value>>,
+    components: Mutex<HashMap<(Entity, String), Value>>,
 }
 
 impl InMemoryDataStore {
@@ -109,7 +127,19 @@ impl DataStore for InMemoryDataStore {
 
     fn delete_entity(&self, entity_id: &str) -> Result<bool, DataStoreError> {
         let mut entities = self.entities.lock().unwrap();
-        Ok(entities.remove(entity_id).is_some())
+
+        if let Some(entity) = entities.remove(entity_id) {
+            // Cascade delete: remove all components belonging to this entity
+            drop(entities); // Release the lock
+            let mut components = self.components.lock().unwrap();
+
+            // Remove all components that belong to this entity
+            components.retain(|(comp_entity, _), _| comp_entity != &entity);
+
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     fn list_entities(&self) -> Result<Vec<Entity>, DataStoreError> {
@@ -177,36 +207,68 @@ impl DataStore for InMemoryDataStore {
             .collect())
     }
 
-    fn create_component(&self, id: &str, data: &Value) -> Result<(), DataStoreError> {
-        let mut components = self.components.lock().unwrap();
+    fn create_component(
+        &self,
+        entity: &Entity,
+        id: &str,
+        data: &Value,
+    ) -> Result<(), DataStoreError> {
+        // First verify the entity exists
+        let entities = self.entities.lock().unwrap();
+        let entity_id = entity.to_string();
+        if !entities.contains_key(&entity_id) {
+            return Err(DataStoreError::NotFound);
+        }
+        drop(entities);
 
-        if components.contains_key(id) {
+        let mut components = self.components.lock().unwrap();
+        let key = (*entity, id.to_string());
+
+        if components.contains_key(&key) {
             return Err(DataStoreError::AlreadyExists);
         }
 
-        components.insert(id.to_string(), data.clone());
+        components.insert(key, data.clone());
         Ok(())
     }
 
-    fn get_component(&self, id: &str) -> Result<Option<Value>, DataStoreError> {
+    fn get_component(&self, entity: &Entity, id: &str) -> Result<Option<Value>, DataStoreError> {
         let components = self.components.lock().unwrap();
-        Ok(components.get(id).cloned())
+        let key = (*entity, id.to_string());
+        Ok(components.get(&key).cloned())
     }
 
-    fn update_component(&self, id: &str, data: &Value) -> Result<bool, DataStoreError> {
+    fn update_component(
+        &self,
+        entity: &Entity,
+        id: &str,
+        data: &Value,
+    ) -> Result<bool, DataStoreError> {
         let mut components = self.components.lock().unwrap();
+        let key = (*entity, id.to_string());
 
-        if components.contains_key(id) {
-            components.insert(id.to_string(), data.clone());
+        if let std::collections::hash_map::Entry::Occupied(mut e) = components.entry(key) {
+            e.insert(data.clone());
             Ok(true)
         } else {
             Ok(false)
         }
     }
 
-    fn delete_component(&self, id: &str) -> Result<bool, DataStoreError> {
+    fn delete_component(&self, entity: &Entity, id: &str) -> Result<bool, DataStoreError> {
         let mut components = self.components.lock().unwrap();
-        Ok(components.remove(id).is_some())
+        let key = (*entity, id.to_string());
+        Ok(components.remove(&key).is_some())
+    }
+
+    fn delete_all_components_for_entity(&self, entity: &Entity) -> Result<u32, DataStoreError> {
+        let mut components = self.components.lock().unwrap();
+        let initial_count = components.len();
+
+        components.retain(|(comp_entity, _), _| comp_entity != entity);
+
+        let removed_count = initial_count - components.len();
+        Ok(removed_count as u32)
     }
 
     fn delete_all_components(&self) -> Result<u32, DataStoreError> {
@@ -216,7 +278,24 @@ impl DataStore for InMemoryDataStore {
         Ok(count)
     }
 
-    fn list_components(&self) -> Result<Vec<(String, Value)>, DataStoreError> {
+    fn list_components_for_entity(
+        &self,
+        entity: &Entity,
+    ) -> Result<Vec<(String, Value)>, DataStoreError> {
+        let components = self.components.lock().unwrap();
+        Ok(components
+            .iter()
+            .filter_map(|((comp_entity, comp_id), value)| {
+                if comp_entity == entity {
+                    Some((comp_id.clone(), value.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect())
+    }
+
+    fn list_components(&self) -> Result<Vec<((Entity, String), Value)>, DataStoreError> {
         let components = self.components.lock().unwrap();
         Ok(components
             .iter()
@@ -316,31 +395,47 @@ mod tests {
     #[test]
     fn component_instance_crud() {
         let store = InMemoryDataStore::new();
+        let entity = test_entity();
         let component_data = json!({"color": "red"});
         let comp_id = "test_comp";
 
-        // Create
-        assert!(store.create_component(comp_id, &component_data).is_ok());
+        // First create the entity
+        store.create_entity(&entity).unwrap();
 
-        // Get
-        let retrieved = store.get_component(comp_id).unwrap();
+        // Create component
+        assert!(
+            store
+                .create_component(&entity, comp_id, &component_data)
+                .is_ok()
+        );
+
+        // Get component
+        let retrieved = store.get_component(&entity, comp_id).unwrap();
         assert_eq!(retrieved, Some(component_data));
 
-        // Update
+        // Update component
         let updated_data = json!({"color": "blue"});
-        assert!(store.update_component(comp_id, &updated_data).unwrap());
+        assert!(
+            store
+                .update_component(&entity, comp_id, &updated_data)
+                .unwrap()
+        );
 
-        let retrieved = store.get_component(comp_id).unwrap();
+        let retrieved = store.get_component(&entity, comp_id).unwrap();
         assert_eq!(retrieved, Some(updated_data));
 
-        // Delete
-        assert!(store.delete_component(comp_id).unwrap());
-        assert_eq!(store.get_component(comp_id).unwrap(), None);
+        // Delete component
+        assert!(store.delete_component(&entity, comp_id).unwrap());
+        assert_eq!(store.get_component(&entity, comp_id).unwrap(), None);
     }
 
     #[test]
     fn delete_all_operations() {
         let store = InMemoryDataStore::new();
+        let entity = test_entity();
+
+        // First create the entity
+        store.create_entity(&entity).unwrap();
 
         // Create some test data
         let def1 = test_component_definition();
@@ -349,8 +444,12 @@ mod tests {
         store.create_component_definition("def2", &def2).unwrap();
 
         let comp_data = json!({"test": "data"});
-        store.create_component("comp1", &comp_data).unwrap();
-        store.create_component("comp2", &comp_data).unwrap();
+        store
+            .create_component(&entity, "comp1", &comp_data)
+            .unwrap();
+        store
+            .create_component(&entity, "comp2", &comp_data)
+            .unwrap();
 
         // Delete all
         assert_eq!(store.delete_all_component_definitions().unwrap(), 2);
@@ -359,5 +458,88 @@ mod tests {
         // Verify empty
         assert!(store.list_component_definitions().unwrap().is_empty());
         assert!(store.list_components().unwrap().is_empty());
+    }
+
+    #[test]
+    fn cascade_delete_on_entity_removal() {
+        let store = InMemoryDataStore::new();
+        let entity = test_entity();
+
+        // Create entity and components
+        store.create_entity(&entity).unwrap();
+        let comp_data = json!({"test": "value"});
+        store
+            .create_component(&entity, "comp1", &comp_data)
+            .unwrap();
+        store
+            .create_component(&entity, "comp2", &comp_data)
+            .unwrap();
+
+        // Verify components exist
+        assert_eq!(store.list_components_for_entity(&entity).unwrap().len(), 2);
+
+        // Delete entity - should cascade delete components
+        assert!(store.delete_entity(&entity.to_string()).unwrap());
+
+        // Verify all components are gone
+        assert_eq!(store.list_components_for_entity(&entity).unwrap().len(), 0);
+        assert_eq!(store.list_components().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn component_requires_existing_entity() {
+        let store = InMemoryDataStore::new();
+        let entity = test_entity();
+        let comp_data = json!({"test": "value"});
+
+        // Try to create component for non-existent entity
+        assert!(matches!(
+            store.create_component(&entity, "comp1", &comp_data),
+            Err(DataStoreError::NotFound)
+        ));
+    }
+
+    #[test]
+    fn entity_scoped_component_isolation() {
+        let store = InMemoryDataStore::new();
+        let entity1 = Entity::new([1u8; 32]);
+        let entity2 = Entity::new([2u8; 32]);
+
+        // Create both entities
+        store.create_entity(&entity1).unwrap();
+        store.create_entity(&entity2).unwrap();
+
+        // Create components with same ID for different entities
+        let comp_data1 = json!({"entity": "one"});
+        let comp_data2 = json!({"entity": "two"});
+
+        store
+            .create_component(&entity1, "same_id", &comp_data1)
+            .unwrap();
+        store
+            .create_component(&entity2, "same_id", &comp_data2)
+            .unwrap();
+
+        // Verify components are separate
+        assert_eq!(
+            store.get_component(&entity1, "same_id").unwrap(),
+            Some(comp_data1)
+        );
+        assert_eq!(
+            store.get_component(&entity2, "same_id").unwrap(),
+            Some(comp_data2.clone())
+        );
+
+        // Verify entity-scoped listing
+        assert_eq!(store.list_components_for_entity(&entity1).unwrap().len(), 1);
+        assert_eq!(store.list_components_for_entity(&entity2).unwrap().len(), 1);
+
+        // Delete component from one entity shouldn't affect the other
+        assert!(store.delete_component(&entity1, "same_id").unwrap());
+        assert_eq!(store.get_component(&entity1, "same_id").unwrap(), None);
+        assert_eq!(
+            store.get_component(&entity2, "same_id").unwrap(),
+            Some(comp_data2.clone())
+        );
     }
 }

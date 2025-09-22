@@ -70,22 +70,26 @@ pub enum LogOperation {
 
     // Component Instance operations
     ComponentCreate {
+        entity_id: String,
         component_id: String,
         component_data: Value,
         validation_result: Option<ValidationResult>,
     },
     ComponentUpdate {
+        entity_id: String,
         component_id: String,
         old_data: Option<Value>,
         new_data: Value,
         validation_result: Option<ValidationResult>,
     },
     ComponentPatch {
+        entity_id: String,
         component_id: String,
         patch_data: Value,
         result_data: Value,
     },
     ComponentDelete {
+        entity_id: String,
         component_id: String,
         deleted_data: Option<Value>,
     },
@@ -391,9 +395,10 @@ macro_rules! log_entity_delete {
 
 #[macro_export]
 macro_rules! log_component_create {
-    ($component_id:expr, $data:expr, $validation:expr) => {
+    ($entity_id:expr, $component_id:expr, $data:expr, $validation:expr) => {
         $crate::LogEntry::new(
             $crate::LogOperation::ComponentCreate {
+                entity_id: $entity_id.to_string(),
                 component_id: $component_id.to_string(),
                 component_data: $data,
                 validation_result: $validation,
@@ -574,13 +579,16 @@ impl DurableLogger {
             }
 
             LogOperation::ComponentCreate {
+                entity_id,
                 component_id,
                 component_data,
                 ..
             } => {
+                let entity = entity_id.parse::<Entity>()?;
                 // Create component - AlreadyExists is ok for replay, other errors fail
                 let result = data_operations::replay::create_component(
                     data_store,
+                    &entity,
                     component_id,
                     component_data,
                 );
@@ -592,20 +600,32 @@ impl DurableLogger {
             }
 
             LogOperation::ComponentUpdate {
+                entity_id,
                 component_id,
                 new_data,
                 ..
             } => {
-                let result =
-                    DataStoreOperations::update_component(data_store, component_id, new_data);
+                let entity = entity_id.parse::<Entity>()?;
+                let result = DataStoreOperations::update_component(
+                    data_store,
+                    &entity,
+                    component_id,
+                    new_data,
+                );
                 if !result.success {
                     return Err(result.into_error().into());
                 }
                 Ok(())
             }
 
-            LogOperation::ComponentDelete { component_id, .. } => {
-                let result = DataStoreOperations::delete_component(data_store, component_id);
+            LogOperation::ComponentDelete {
+                entity_id,
+                component_id,
+                ..
+            } => {
+                let entity = entity_id.parse::<Entity>()?;
+                let result =
+                    DataStoreOperations::delete_component(data_store, &entity, component_id);
                 if !result.success {
                     return Err(result.into_error().into());
                 }
@@ -637,12 +657,18 @@ impl DurableLogger {
             }
 
             LogOperation::ComponentPatch {
+                entity_id,
                 component_id,
                 result_data,
                 ..
             } => {
-                let result =
-                    DataStoreOperations::update_component(data_store, component_id, result_data);
+                let entity = entity_id.parse::<Entity>()?;
+                let result = DataStoreOperations::update_component(
+                    data_store,
+                    &entity,
+                    component_id,
+                    result_data,
+                );
                 if !result.success {
                     return Err(result.into_error().into());
                 }
@@ -836,6 +862,7 @@ mod tests {
         let component_data = json!({"color": "red"});
 
         let create_op = LogOperation::ComponentCreate {
+            entity_id: "entity:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
             component_id: "comp_123".to_string(),
             component_data: component_data.clone(),
             validation_result: Some(ValidationResult::success()),
@@ -845,6 +872,7 @@ mod tests {
         assert_eq!(create_entry.component_id(), Some("comp_123".to_string()));
 
         let update_op = LogOperation::ComponentUpdate {
+            entity_id: "entity:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
             component_id: "comp_456".to_string(),
             old_data: Some(json!({"color": "blue"})),
             new_data: component_data.clone(),
@@ -854,6 +882,7 @@ mod tests {
         assert_eq!(update_entry.operation_type(), "ComponentUpdate");
 
         let patch_op = LogOperation::ComponentPatch {
+            entity_id: "entity:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
             component_id: "comp_789".to_string(),
             patch_data: json!({"color": "green"}),
             result_data: component_data,
@@ -862,6 +891,7 @@ mod tests {
         assert_eq!(patch_entry.operation_type(), "ComponentPatch");
 
         let delete_op = LogOperation::ComponentDelete {
+            entity_id: "entity:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
             component_id: "comp_delete".to_string(),
             deleted_data: Some(json!({"color": "yellow"})),
         };
@@ -947,6 +977,7 @@ mod tests {
     #[test]
     fn serialization_round_trip() {
         let operation = LogOperation::ComponentCreate {
+            entity_id: "entity:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
             component_id: "test_comp".to_string(),
             component_data: json!({"value": 42}),
             validation_result: Some(ValidationResult::success()),
@@ -974,6 +1005,7 @@ mod tests {
         assert_eq!(delete_log.operation_type(), "EntityDelete");
 
         let component_log = log_component_create!(
+            "entity:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "comp_789",
             json!({"test": "data"}),
             Some(ValidationResult::success())
@@ -1038,6 +1070,7 @@ mod tests {
 
         let comp_entry = LogEntry::new(
             LogOperation::ComponentPatch {
+                entity_id: "entity:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
                 component_id: "comp_456".to_string(),
                 patch_data: json!({}),
                 result_data: json!({}),

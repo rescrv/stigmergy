@@ -26,11 +26,11 @@ Commands:
   componentdefinition get <id>                 Get a component definition by ID
   componentdefinition update <id> <schema>     Update a component definition
   componentdefinition delete <id>              Delete a component definition
-  component create <data>                      Create a component instance
-  component list                               List all component instances
-  component get <id>                           Get a component instance by ID
-  component update <id> <data>                 Update a component instance
-  component delete <id>                        Delete a component instance"#;
+  component create <entity-id> <data>          Create a component instance for an entity
+  component list <entity-id>                   List all component instances for an entity
+  component get <entity-id> <comp-id>          Get a component instance by ID for an entity
+  component update <entity-id> <comp-id> <data> Update a component instance for an entity
+  component delete <entity-id> <comp-id>       Delete a component instance from an entity"#;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -87,7 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if free.len() < 2 {
                 cli_utils::exit_with_usage_error(
                     "component command requires a subcommand",
-                    "Usage: stigctl component <create|list|get|update|delete> [args...]",
+                    "Usage: stigctl component <create|list|get|update|delete> [args...] (Note: all component operations now require an entity-id)",
                 );
             }
             handle_component_command(&free[1..], &client).await;
@@ -257,20 +257,22 @@ Example: stigctl componentdefinition create MyComponent '{"type":"object","prope
 async fn handle_component_command(args: &[String], client: &http_utils::StigmergyClient) {
     match args[0].as_str() {
         "create" => {
-            if args.len() < 2 {
+            if args.len() < 3 {
                 cli_utils::exit_with_usage_error(
-                    "create command requires data",
-                    r#"Usage: stigctl component create <data-json>
-Example: stigctl component create '{"value":"hello"}'"#,
+                    "create command requires entity-id and data",
+                    r#"Usage: stigctl component create <entity-id> <data-json>
+Example: stigctl component create entity:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA '{"value":"hello"}'"#,
                 );
             }
 
-            let data_str = &args[1];
+            let entity_id = &args[1];
+            let data_str = &args[2];
             let data = component_utils::parse_json_data(data_str)
                 .unwrap_or_else(|e| cli_utils::exit_with_error(&e));
 
+            let path = format!("entity/{}/component", entity_id);
             let component = http_utils::execute_or_exit(
-                || client.post::<Value, Value>("component", &data),
+                || client.post::<Value, Value>(&path, &data),
                 "Failed to create component",
             )
             .await;
@@ -279,8 +281,17 @@ Example: stigctl component create '{"value":"hello"}'"#,
             cli_utils::print_json_or_exit(&component, "component");
         }
         "list" => {
+            if args.len() < 2 {
+                cli_utils::exit_with_usage_error(
+                    "list command requires entity-id",
+                    "Usage: stigctl component list <entity-id>",
+                );
+            }
+
+            let entity_id = &args[1];
+            let path = format!("entity/{}/component", entity_id);
             let components = http_utils::execute_or_exit(
-                || client.get::<Vec<Value>>("component"),
+                || client.get::<Vec<Value>>(&path),
                 "Failed to list components",
             )
             .await;
@@ -288,36 +299,44 @@ Example: stigctl component create '{"value":"hello"}'"#,
             cli_utils::print_json_or_exit(&components, "components");
         }
         "get" => {
-            if args.len() < 2 {
+            if args.len() < 3 {
                 cli_utils::exit_with_usage_error(
-                    "get command requires a component ID",
-                    "Usage: stigctl component get <id>",
+                    "get command requires entity-id and component-id",
+                    "Usage: stigctl component get <entity-id> <component-id>",
                 );
             }
 
-            let comp_id = &args[1];
-            let path = format!("component/{}", comp_id);
-            let error_msg = format!("Failed to get component {}", comp_id);
+            let entity_id = &args[1];
+            let comp_id = &args[2];
+            let path = format!("entity/{}/component/{}", entity_id, comp_id);
+            let error_msg = format!(
+                "Failed to get component {} for entity {}",
+                comp_id, entity_id
+            );
             let component =
                 http_utils::execute_or_exit(|| client.get::<Value>(&path), &error_msg).await;
 
             cli_utils::print_json_or_exit(&component, "component");
         }
         "update" => {
-            if args.len() < 3 {
+            if args.len() < 4 {
                 cli_utils::exit_with_usage_error(
-                    "update command requires ID and data",
-                    "Usage: stigctl component update <id> <data-json>",
+                    "update command requires entity-id, component-id, and data",
+                    "Usage: stigctl component update <entity-id> <component-id> <data-json>",
                 );
             }
 
-            let comp_id = &args[1];
-            let data_str = &args[2];
+            let entity_id = &args[1];
+            let comp_id = &args[2];
+            let data_str = &args[3];
             let data = component_utils::parse_json_data(data_str)
                 .unwrap_or_else(|e| cli_utils::exit_with_error(&e));
 
-            let path = format!("component/{}", comp_id);
-            let error_msg = format!("Failed to update component {}", comp_id);
+            let path = format!("entity/{}/component/{}", entity_id, comp_id);
+            let error_msg = format!(
+                "Failed to update component {} for entity {}",
+                comp_id, entity_id
+            );
             let component = http_utils::execute_or_exit(
                 || client.put::<Value, Value>(&path, &data),
                 &error_msg,
@@ -328,19 +347,23 @@ Example: stigctl component create '{"value":"hello"}'"#,
             cli_utils::print_json_or_exit(&component, "component");
         }
         "delete" => {
-            if args.len() < 2 {
+            if args.len() < 3 {
                 cli_utils::exit_with_usage_error(
-                    "delete command requires a component ID",
-                    "Usage: stigctl component delete <id>",
+                    "delete command requires entity-id and component-id",
+                    "Usage: stigctl component delete <entity-id> <component-id>",
                 );
             }
 
-            let comp_id = &args[1];
-            let path = format!("component/{}", comp_id);
-            let error_msg = format!("Failed to delete component {}", comp_id);
+            let entity_id = &args[1];
+            let comp_id = &args[2];
+            let path = format!("entity/{}/component/{}", entity_id, comp_id);
+            let error_msg = format!(
+                "Failed to delete component {} for entity {}",
+                comp_id, entity_id
+            );
             http_utils::execute_or_exit(|| client.delete(&path), &error_msg).await;
 
-            println!("Deleted component: {}", comp_id);
+            println!("Deleted component {} from entity {}", comp_id, entity_id);
         }
         _ => {
             cli_utils::exit_with_error(&format!(
@@ -453,34 +476,50 @@ async fn apply_log_entry(
             handle_response(response, "ComponentDefinitionDeleteAll").await?;
         }
         LogOperation::ComponentCreate {
+            entity_id,
             component_id: _,
             component_data,
             ..
         } => {
-            let url = format!("{}/api/v1/component", base_url);
+            let url = format!("{}/api/v1/entity/{}/component", base_url, entity_id);
             let response = client.post(&url).json(component_data).send().await?;
             handle_response(response, "ComponentCreate").await?;
         }
         LogOperation::ComponentUpdate {
+            entity_id,
             component_id,
             new_data,
             ..
         } => {
-            let url = format!("{}/api/v1/component/{}", base_url, component_id);
+            let url = format!(
+                "{}/api/v1/entity/{}/component/{}",
+                base_url, entity_id, component_id
+            );
             let response = client.put(&url).json(new_data).send().await?;
             handle_response(response, "ComponentUpdate").await?;
         }
         LogOperation::ComponentPatch {
+            entity_id,
             component_id,
             patch_data,
             ..
         } => {
-            let url = format!("{}/api/v1/component/{}", base_url, component_id);
+            let url = format!(
+                "{}/api/v1/entity/{}/component/{}",
+                base_url, entity_id, component_id
+            );
             let response = client.patch(&url).json(patch_data).send().await?;
             handle_response(response, "ComponentPatch").await?;
         }
-        LogOperation::ComponentDelete { component_id, .. } => {
-            let url = format!("{}/api/v1/component/{}", base_url, component_id);
+        LogOperation::ComponentDelete {
+            entity_id,
+            component_id,
+            ..
+        } => {
+            let url = format!(
+                "{}/api/v1/entity/{}/component/{}",
+                base_url, entity_id, component_id
+            );
             let response = client.delete(&url).send().await?;
             handle_response(response, "ComponentDelete").await?;
         }

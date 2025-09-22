@@ -14,7 +14,7 @@ pub mod http_utils;
 
 pub use component::{Component, ComponentDefinition, create_component_router};
 pub use data_operations::{DataStoreOperations, OperationResult};
-pub use data_store::{DataStore, DataStoreError, InMemoryDataStore};
+pub use data_store::{ComponentList, DataStore, DataStoreError, InMemoryDataStore};
 pub use entity::{Entity, EntityParseError, create_entity_router};
 pub use json_schema::JsonSchema;
 pub use log_entry::{
