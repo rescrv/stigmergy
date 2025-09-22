@@ -1,15 +1,17 @@
 mod component;
+mod data_store;
 mod entity;
 mod json_schema;
 mod log_entry;
 mod validate;
 
 pub use component::{Component, ComponentDefinition, create_component_router};
+pub use data_store::{DataStore, DataStoreError, InMemoryDataStore};
 pub use entity::{Entity, EntityParseError, create_entity_router};
 pub use json_schema::JsonSchema;
 pub use log_entry::{
-    DurableLogger, LogEntry, LogMetadata, LogOperation, OperationStatus, ValidationResult,
-    ValidationType,
+    DurableLogger, LogEntry, LogMetadata, LogOperation, OperationStatus, ReplayResult,
+    ValidationResult, ValidationType,
 };
 pub use validate::{ValidationError, validate_value};
 

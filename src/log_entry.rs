@@ -2,10 +2,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 
-use crate::{ComponentDefinition, Entity};
+use crate::{ComponentDefinition, DataStore, DataStoreError, Entity};
 
 /// Comprehensive logging system for all state transitions in the stigmergy system.
 ///
@@ -440,6 +440,221 @@ impl DurableLogger {
             eprintln!("Failed to write log entry: {}", e);
         }
     }
+
+    /// Reads all log entries from the JSONL file
+    pub fn read_log_entries(&self) -> Result<Vec<LogEntry>, std::io::Error> {
+        if !self.log_file_path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let file = std::fs::File::open(&self.log_file_path)?;
+        let reader = BufReader::new(file);
+        let mut entries = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if !line.trim().is_empty() {
+                match serde_json::from_str::<LogEntry>(&line) {
+                    Ok(entry) => entries.push(entry),
+                    Err(e) => {
+                        eprintln!("Failed to parse log entry: {} - Line: {}", e, line);
+                    }
+                }
+            }
+        }
+
+        Ok(entries)
+    }
+
+    /// Replays successful operations from the log against a data store
+    /// Only replays operations that were originally successful to avoid duplicating failures
+    pub fn replay_against_store(
+        &self,
+        data_store: &dyn DataStore,
+    ) -> Result<ReplayResult, std::io::Error> {
+        let entries = self.read_log_entries()?;
+        let mut result = ReplayResult::new();
+
+        for entry in entries {
+            // Only replay operations that were originally successful
+            if !entry.is_success() {
+                result.skipped += 1;
+                continue;
+            }
+
+            match self.replay_single_operation(&entry, data_store) {
+                Ok(_) => result.successful += 1,
+                Err(e) => {
+                    result.failed += 1;
+                    result.errors.push(format!(
+                        "Failed to replay {}: {}",
+                        entry.operation_type(),
+                        e
+                    ));
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Replays a single log operation against a data store
+    fn replay_single_operation(
+        &self,
+        entry: &LogEntry,
+        data_store: &dyn DataStore,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        match &entry.operation {
+            LogOperation::EntityCreate { entity, .. } => {
+                // Ignore AlreadyExists errors as the entity might already be in the store
+                if let Err(DataStoreError::AlreadyExists) = data_store.create_entity(entity) {
+                    // Entity already exists, that's fine for replay
+                }
+                Ok(())
+            }
+
+            LogOperation::EntityDelete { entity_id, success } => {
+                if *success {
+                    data_store.delete_entity(entity_id)?;
+                }
+                Ok(())
+            }
+
+            LogOperation::ComponentDefinitionCreate { definition, .. } => {
+                let def_id = format!("{:?}", definition.component);
+                // Ignore AlreadyExists errors
+                if let Err(DataStoreError::AlreadyExists) =
+                    data_store.create_component_definition(&def_id, definition)
+                {
+                    // Definition already exists, that's fine for replay
+                }
+                Ok(())
+            }
+
+            LogOperation::ComponentDefinitionUpdate {
+                definition_id,
+                new_definition,
+                ..
+            } => {
+                data_store.update_component_definition(definition_id, new_definition)?;
+                Ok(())
+            }
+
+            LogOperation::ComponentDefinitionDelete { definition_id, .. } => {
+                data_store.delete_component_definition(definition_id)?;
+                Ok(())
+            }
+
+            LogOperation::ComponentDefinitionDeleteAll { .. } => {
+                data_store.delete_all_component_definitions()?;
+                Ok(())
+            }
+
+            LogOperation::ComponentCreate {
+                component_id,
+                component_data,
+                ..
+            } => {
+                // Ignore AlreadyExists errors
+                if let Err(DataStoreError::AlreadyExists) =
+                    data_store.create_component(component_id, component_data)
+                {
+                    // Component already exists, that's fine for replay
+                }
+                Ok(())
+            }
+
+            LogOperation::ComponentUpdate {
+                component_id,
+                new_data,
+                ..
+            } => {
+                data_store.update_component(component_id, new_data)?;
+                Ok(())
+            }
+
+            LogOperation::ComponentDelete { component_id, .. } => {
+                data_store.delete_component(component_id)?;
+                Ok(())
+            }
+
+            LogOperation::ComponentDeleteAll { .. } => {
+                data_store.delete_all_components()?;
+                Ok(())
+            }
+
+            LogOperation::ComponentDefinitionPatch {
+                definition_id,
+                result_definition,
+                ..
+            } => {
+                data_store.update_component_definition(definition_id, result_definition)?;
+                Ok(())
+            }
+
+            LogOperation::ComponentPatch {
+                component_id,
+                result_data,
+                ..
+            } => {
+                data_store.update_component(component_id, result_data)?;
+                Ok(())
+            }
+
+            // These operations are read-only or metadata, so we skip them in replay
+            LogOperation::ComponentDefinitionGet { .. }
+            | LogOperation::ComponentGet { .. }
+            | LogOperation::ValidationPerformed { .. }
+            | LogOperation::SchemaGeneration { .. } => {
+                // Skip read-only operations and metadata
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Result of replaying a log against a data store
+#[derive(Debug, Clone)]
+pub struct ReplayResult {
+    pub successful: u32,
+    pub failed: u32,
+    pub skipped: u32,
+    pub errors: Vec<String>,
+}
+
+impl ReplayResult {
+    pub fn new() -> Self {
+        Self {
+            successful: 0,
+            failed: 0,
+            skipped: 0,
+            errors: Vec::new(),
+        }
+    }
+
+    pub fn total_processed(&self) -> u32 {
+        self.successful + self.failed
+    }
+}
+
+impl Default for ReplayResult {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for ReplayResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Replay completed: {} successful, {} failed, {} skipped",
+            self.successful, self.failed, self.skipped
+        )?;
+        if !self.errors.is_empty() {
+            write!(f, "\nErrors:\n{}", self.errors.join("\n"))?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -862,5 +1077,263 @@ mod tests {
         assert!(contents.contains("test_request"));
 
         fs::remove_file(test_path).ok();
+    }
+
+    #[test]
+    fn log_replay_reads_entries_correctly() {
+        use std::fs;
+        use std::process;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let test_path = PathBuf::from(format!(
+            "test_replay_read_{}_{}.jsonl",
+            process::id(),
+            timestamp
+        ));
+
+        let logger = DurableLogger::new(test_path.clone());
+
+        // Create multiple log entries
+        let entity1 = test_entity();
+        let entity2 = Entity::new([2u8; 32]);
+
+        let entry1 = LogEntry::new(
+            LogOperation::EntityCreate {
+                entity: entity1,
+                was_random: false,
+            },
+            LogMetadata::rest_api(None).with_status(OperationStatus::Success),
+        );
+
+        let entry2 = LogEntry::new(
+            LogOperation::EntityCreate {
+                entity: entity2,
+                was_random: true,
+            },
+            LogMetadata::rest_api(None).with_status(OperationStatus::Success),
+        );
+
+        logger.log_or_error(&entry1);
+        logger.log_or_error(&entry2);
+
+        // Read back the entries
+        let read_entries = logger
+            .read_log_entries()
+            .expect("Failed to read log entries");
+        assert_eq!(read_entries.len(), 2);
+
+        assert_eq!(read_entries[0].operation_type(), "EntityCreate");
+        assert_eq!(read_entries[1].operation_type(), "EntityCreate");
+
+        fs::remove_file(test_path).ok();
+    }
+
+    #[test]
+    fn log_replay_against_empty_store() {
+        use crate::InMemoryDataStore;
+        use std::fs;
+        use std::process;
+        use std::sync::Arc;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let test_path = PathBuf::from(format!(
+            "test_replay_empty_{}_{}.jsonl",
+            process::id(),
+            timestamp
+        ));
+
+        let logger = DurableLogger::new(test_path.clone());
+        let data_store = Arc::new(InMemoryDataStore::new());
+
+        // Create log entries for various operations
+        let entity = test_entity();
+        let definition = test_component_definition();
+
+        let entries = vec![
+            LogEntry::new(
+                LogOperation::EntityCreate {
+                    entity,
+                    was_random: false,
+                },
+                LogMetadata::rest_api(None).with_status(OperationStatus::Success),
+            ),
+            LogEntry::new(
+                LogOperation::ComponentDefinitionCreate {
+                    definition: definition.clone(),
+                    validation_result: ValidationResult::Success,
+                },
+                LogMetadata::rest_api(None).with_status(OperationStatus::Success),
+            ),
+        ];
+
+        // Write entries to log
+        for entry in &entries {
+            logger.log_or_error(entry);
+        }
+
+        // Replay against empty store
+        let result = logger
+            .replay_against_store(&*data_store)
+            .expect("Failed to replay log");
+
+        assert_eq!(result.successful, 2);
+        assert_eq!(result.failed, 0);
+        assert_eq!(result.skipped, 0);
+
+        // Verify data was replayed correctly
+        let entity_id = entity.to_string();
+        assert!(data_store.get_entity(&entity_id).unwrap().is_some());
+
+        let def_id = format!("{:?}", definition.component);
+        assert!(
+            data_store
+                .get_component_definition(&def_id)
+                .unwrap()
+                .is_some()
+        );
+
+        fs::remove_file(test_path).ok();
+    }
+
+    #[test]
+    fn log_replay_skips_failed_operations() {
+        use crate::InMemoryDataStore;
+        use std::fs;
+        use std::process;
+        use std::sync::Arc;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let test_path = PathBuf::from(format!(
+            "test_replay_failed_{}_{}.jsonl",
+            process::id(),
+            timestamp
+        ));
+
+        let logger = DurableLogger::new(test_path.clone());
+        let data_store = Arc::new(InMemoryDataStore::new());
+
+        let entity = test_entity();
+
+        let entries = vec![
+            // Successful operation
+            LogEntry::new(
+                LogOperation::EntityCreate {
+                    entity,
+                    was_random: false,
+                },
+                LogMetadata::rest_api(None).with_status(OperationStatus::Success),
+            ),
+            // Failed operation - should be skipped
+            LogEntry::new(
+                LogOperation::EntityDelete {
+                    entity_id: "invalid_entity".to_string(),
+                    success: false,
+                },
+                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+            ),
+        ];
+
+        for entry in &entries {
+            logger.log_or_error(entry);
+        }
+
+        let result = logger
+            .replay_against_store(&*data_store)
+            .expect("Failed to replay log");
+
+        assert_eq!(result.successful, 1);
+        assert_eq!(result.failed, 0);
+        assert_eq!(result.skipped, 1);
+
+        fs::remove_file(test_path).ok();
+    }
+
+    #[test]
+    fn log_replay_handles_patch_operations() {
+        use crate::{Component, InMemoryDataStore};
+        use serde_json::json;
+        use std::fs;
+        use std::process;
+        use std::sync::Arc;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let test_path = PathBuf::from(format!(
+            "test_replay_patch_{}_{}.jsonl",
+            process::id(),
+            timestamp
+        ));
+
+        let logger = DurableLogger::new(test_path.clone());
+        let data_store = Arc::new(InMemoryDataStore::new());
+
+        // First create a component definition to patch
+        let component = Component::new("TestComponent").unwrap();
+        let mut definition = ComponentDefinition::new(component.clone(), json!({"type": "string"}));
+        let def_id = format!("{:?}", component);
+        data_store
+            .create_component_definition(&def_id, &definition)
+            .unwrap();
+
+        // Create patch operation
+        definition.schema = json!({"type": "number"});
+        let patch_entry = LogEntry::new(
+            LogOperation::ComponentDefinitionPatch {
+                definition_id: def_id.clone(),
+                patch_data: json!({"schema": {"type": "number"}}),
+                result_definition: definition.clone(),
+            },
+            LogMetadata::rest_api(None).with_status(OperationStatus::Success),
+        );
+
+        logger.log_or_error(&patch_entry);
+
+        let result = logger
+            .replay_against_store(&*data_store)
+            .expect("Failed to replay log");
+
+        assert_eq!(result.successful, 1);
+        assert_eq!(result.failed, 0);
+
+        // Verify patch was applied
+        let updated_def = data_store
+            .get_component_definition(&def_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated_def.schema, json!({"type": "number"}));
+
+        fs::remove_file(test_path).ok();
+    }
+
+    #[test]
+    fn replay_result_display_formatting() {
+        let mut result = ReplayResult::new();
+        result.successful = 5;
+        result.failed = 2;
+        result.skipped = 1;
+        result.errors.push("Test error 1".to_string());
+        result.errors.push("Test error 2".to_string());
+
+        let display_str = format!("{}", result);
+        assert!(display_str.contains("5 successful"));
+        assert!(display_str.contains("2 failed"));
+        assert!(display_str.contains("1 skipped"));
+        assert!(display_str.contains("Test error 1"));
+        assert!(display_str.contains("Test error 2"));
     }
 }
