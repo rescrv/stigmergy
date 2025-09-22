@@ -4,6 +4,7 @@ mod data_store;
 mod entity;
 mod json_schema;
 mod log_entry;
+mod system_parser;
 mod test_utils;
 mod validate;
 
@@ -26,6 +27,7 @@ pub use log_entry::{
     DurableLogger, LogEntry, LogMetadata, LogOperation, OperationStatus, ReplayResult,
     ValidationResult, ValidationType,
 };
+pub use system_parser::{ParseError, SystemConfig, SystemParser};
 pub use validate::{ValidationError, validate_value};
 
 ///////////////////////////////////////// generate_id_serde ////////////////////////////////////////
