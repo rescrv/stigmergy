@@ -186,7 +186,7 @@ fn validate_schema_structure(schema: &Value) -> Result<(), ValidationError> {
 async fn get_component_definitions(
     State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Query(_params): Query<HashMap<String, String>>,
-) -> Result<Json<Vec<ComponentDefinition>>, StatusCode> {
+) -> Result<Json<Vec<ComponentDefinition>>, (StatusCode, &'static str)> {
     let definitions = match data_store.list_component_definitions() {
         Ok(def_list) => def_list.into_iter().map(|(_id, def)| def).collect(),
         Err(_) => vec![],
@@ -206,7 +206,7 @@ async fn get_component_definitions(
 async fn create_component_definition(
     State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Json(definition): Json<ComponentDefinition>,
-) -> Result<Json<ComponentDefinition>, StatusCode> {
+) -> Result<Json<ComponentDefinition>, (StatusCode, &'static str)> {
     let validation_result = match definition.validate_schema() {
         Ok(()) => LogValidationResult::success(),
         Err(e) => {
@@ -218,7 +218,7 @@ async fn create_component_definition(
                 LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
             logger.log_or_error(&log_entry);
-            return Err(StatusCode::BAD_REQUEST);
+            return Err((StatusCode::BAD_REQUEST, "invalid schema"));
         }
     };
 
@@ -235,8 +235,8 @@ async fn create_component_definition(
         );
         logger.log_or_error(&log_entry);
         return Err(match result.into_error() {
-            crate::DataStoreError::AlreadyExists => StatusCode::CONFLICT,
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
+            crate::DataStoreError::AlreadyExists => (StatusCode::CONFLICT, "already exists"),
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal server error"),
         });
     }
 
@@ -255,7 +255,7 @@ async fn create_component_definition(
 async fn update_component_definition(
     State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Json(definition): Json<ComponentDefinition>,
-) -> Result<Json<ComponentDefinition>, StatusCode> {
+) -> Result<Json<ComponentDefinition>, (StatusCode, &'static str)> {
     let validation_result = match definition.validate_schema() {
         Ok(()) => LogValidationResult::success(),
         Err(e) => {
@@ -269,7 +269,7 @@ async fn update_component_definition(
                 LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
             logger.log_or_error(&log_entry);
-            return Err(StatusCode::BAD_REQUEST);
+            return Err((StatusCode::BAD_REQUEST, "invalid schema"));
         }
     };
 
@@ -288,7 +288,10 @@ async fn update_component_definition(
             LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
         );
         logger.log_or_error(&log_entry);
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to update component definition",
+        ));
     }
 
     let log_entry = LogEntry::new(
@@ -308,7 +311,7 @@ async fn update_component_definition(
 async fn patch_component_definition(
     State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Json(patch): Json<Value>,
-) -> Result<Json<ComponentDefinition>, StatusCode> {
+) -> Result<Json<ComponentDefinition>, (StatusCode, &'static str)> {
     let component = Component::new("PatchedComponent").unwrap();
     let definition = ComponentDefinition {
         component,
@@ -328,7 +331,7 @@ async fn patch_component_definition(
             LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
         );
         logger.log_or_error(&log_entry);
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error"));
     }
 
     let log_entry = LogEntry::new(
@@ -346,7 +349,7 @@ async fn patch_component_definition(
 
 async fn delete_component_definitions(
     State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
-) -> Result<StatusCode, StatusCode> {
+) -> Result<StatusCode, (StatusCode, &'static str)> {
     let result = DataStoreOperations::delete_all_component_definitions(&*data_store);
     let count_deleted = if result.success {
         result.data.unwrap_or(0)
@@ -356,7 +359,7 @@ async fn delete_component_definitions(
             LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
         );
         logger.log_or_error(&log_entry);
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error"));
     };
 
     let log_entry = LogEntry::new(
@@ -371,7 +374,7 @@ async fn delete_component_definitions(
 async fn get_component_definition_by_id(
     State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Path(id): Path<String>,
-) -> Result<Json<ComponentDefinition>, StatusCode> {
+) -> Result<Json<ComponentDefinition>, (StatusCode, &'static str)> {
     let definition = match data_store.get_component_definition(&id) {
         Ok(Some(def)) => def,
         Ok(None) | Err(_) => {
@@ -383,7 +386,7 @@ async fn get_component_definition_by_id(
                 LogMetadata::rest_api(None),
             );
             logger.log_or_error(&log_entry);
-            return Err(StatusCode::NOT_FOUND);
+            return Err((StatusCode::NOT_FOUND, "not found"));
         }
     };
 
@@ -403,7 +406,7 @@ async fn update_component_definition_by_id(
     State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Path(id): Path<String>,
     Json(definition): Json<ComponentDefinition>,
-) -> Result<Json<ComponentDefinition>, StatusCode> {
+) -> Result<Json<ComponentDefinition>, (StatusCode, &'static str)> {
     let validation_result = match definition.validate_schema() {
         Ok(()) => LogValidationResult::success(),
         Err(e) => {
@@ -417,7 +420,7 @@ async fn update_component_definition_by_id(
                 LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
             logger.log_or_error(&log_entry);
-            return Err(StatusCode::BAD_REQUEST);
+            return Err((StatusCode::BAD_REQUEST, "invalid schema"));
         }
     };
 
@@ -434,7 +437,7 @@ async fn update_component_definition_by_id(
             LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
         );
         logger.log_or_error(&log_entry);
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error"));
     }
 
     let log_entry = LogEntry::new(
@@ -455,7 +458,7 @@ async fn patch_component_definition_by_id(
     State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Path(id): Path<String>,
     Json(patch): Json<Value>,
-) -> Result<Json<ComponentDefinition>, StatusCode> {
+) -> Result<Json<ComponentDefinition>, (StatusCode, &'static str)> {
     let component = Component::new(format!("Component{}", id))
         .unwrap_or_else(|| Component::new("PatchedComponent").unwrap());
     let definition = ComponentDefinition {
@@ -474,7 +477,7 @@ async fn patch_component_definition_by_id(
             LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
         );
         logger.log_or_error(&log_entry);
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error"));
     }
 
     let log_entry = LogEntry::new(
@@ -493,7 +496,7 @@ async fn patch_component_definition_by_id(
 async fn delete_component_definition_by_id(
     State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Path(id): Path<String>,
-) -> Result<StatusCode, StatusCode> {
+) -> Result<StatusCode, (StatusCode, &'static str)> {
     let deleted_definition = data_store.get_component_definition(&id).ok().flatten();
     let result = DataStoreOperations::delete_component_definition(&*data_store, &id);
     if !result.success {
@@ -505,7 +508,7 @@ async fn delete_component_definition_by_id(
             LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
         );
         logger.log_or_error(&log_entry);
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error"));
     }
 
     let log_entry = LogEntry::new(
@@ -524,12 +527,12 @@ async fn get_components_for_entity(
     State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Path(entity_id): Path<String>,
     Query(_params): Query<HashMap<String, String>>,
-) -> Result<Json<Vec<ComponentListItem>>, StatusCode> {
+) -> Result<Json<Vec<ComponentListItem>>, (StatusCode, &'static str)> {
     // Parse entity ID (prepend "entity:" prefix to base64 part from URL)
     let full_entity_id = format!("entity:{}", entity_id);
     let entity: Entity = match full_entity_id.parse() {
         Ok(e) => e,
-        Err(_) => return Err(StatusCode::BAD_REQUEST),
+        Err(_) => return Err((StatusCode::BAD_REQUEST, "bad entity")),
     };
 
     let components = match data_store.list_components_for_entity(&entity) {
@@ -559,7 +562,7 @@ async fn get_components_for_entity(
 async fn get_all_components(
     State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Query(_params): Query<HashMap<String, String>>,
-) -> Result<Json<Vec<Value>>, StatusCode> {
+) -> Result<Json<Vec<Value>>, (StatusCode, &'static str)> {
     let components = match data_store.list_components() {
         Ok(comp_list) => comp_list
             .into_iter()
@@ -584,12 +587,12 @@ async fn create_component_for_entity(
     State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Path(entity_id): Path<String>,
     Json(request): Json<CreateComponentRequest>,
-) -> Result<Json<CreateComponentResponse>, StatusCode> {
+) -> Result<Json<CreateComponentResponse>, (StatusCode, &'static str)> {
     // Parse entity ID (prepend "entity:" prefix to base64 part from URL)
     let full_entity_id = format!("entity:{}", entity_id);
     let entity: Entity = match full_entity_id.parse() {
         Ok(e) => e,
-        Err(_) => return Err(StatusCode::BAD_REQUEST),
+        Err(_) => return Err((StatusCode::BAD_REQUEST, "invalid entity id")),
     };
 
     // Look up component definition from data store
@@ -632,7 +635,7 @@ async fn create_component_for_entity(
                 LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
             logger.log_or_error(&log_entry);
-            return Err(StatusCode::BAD_REQUEST);
+            return Err((StatusCode::BAD_REQUEST, "data validation failed"));
         }
     };
 
@@ -651,9 +654,9 @@ async fn create_component_for_entity(
         );
         logger.log_or_error(&log_entry);
         return Err(match result.into_error() {
-            crate::DataStoreError::AlreadyExists => StatusCode::CONFLICT,
-            crate::DataStoreError::NotFound => StatusCode::NOT_FOUND, // Entity doesn't exist
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
+            crate::DataStoreError::AlreadyExists => (StatusCode::CONFLICT, "already exists"),
+            crate::DataStoreError::NotFound => (StatusCode::NOT_FOUND, "entity not found"), // Entity doesn't exist
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal server error"),
         });
     }
 
@@ -681,12 +684,12 @@ async fn update_component_for_entity(
     State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Path(entity_id): Path<String>,
     Json(component): Json<Value>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, (StatusCode, &'static str)> {
     // Parse entity ID (prepend "entity:" prefix to base64 part from URL)
     let full_entity_id = format!("entity:{}", entity_id);
     let entity = match full_entity_id.parse::<Entity>() {
         Ok(e) => e,
-        Err(_) => return Err(StatusCode::BAD_REQUEST),
+        Err(_) => return Err((StatusCode::BAD_REQUEST, "invalid entity id")),
     };
 
     let component_id = "updated_id".to_string();
@@ -708,7 +711,7 @@ async fn update_component_for_entity(
             LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
         );
         logger.log_or_error(&log_entry);
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error"));
     }
 
     let log_entry = LogEntry::new(
@@ -730,12 +733,12 @@ async fn patch_component_for_entity(
     State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Path(entity_id): Path<String>,
     Json(patch): Json<Value>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, (StatusCode, &'static str)> {
     // Parse entity ID (prepend "entity:" prefix to base64 part from URL)
     let full_entity_id = format!("entity:{}", entity_id);
     let entity = match full_entity_id.parse::<Entity>() {
         Ok(e) => e,
-        Err(_) => return Err(StatusCode::BAD_REQUEST),
+        Err(_) => return Err((StatusCode::BAD_REQUEST, "invalid entity id")),
     };
 
     let component_id = "patched_id".to_string();
@@ -752,7 +755,7 @@ async fn patch_component_for_entity(
             LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
         );
         logger.log_or_error(&log_entry);
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error"));
     }
 
     let log_entry = LogEntry::new(
@@ -772,12 +775,12 @@ async fn patch_component_for_entity(
 async fn delete_components_for_entity(
     State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Path(entity_id): Path<String>,
-) -> Result<StatusCode, StatusCode> {
+) -> Result<StatusCode, (StatusCode, &'static str)> {
     // Parse entity ID (prepend "entity:" prefix to base64 part from URL)
     let full_entity_id = format!("entity:{}", entity_id);
     let entity = match full_entity_id.parse::<Entity>() {
         Ok(e) => e,
-        Err(_) => return Err(StatusCode::BAD_REQUEST),
+        Err(_) => return Err((StatusCode::BAD_REQUEST, "invalid entity id")),
     };
 
     let result = DataStoreOperations::delete_all_components_for_entity(&*data_store, &entity);
@@ -789,7 +792,7 @@ async fn delete_components_for_entity(
             LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
         );
         logger.log_or_error(&log_entry);
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error"));
     };
 
     let log_entry = LogEntry::new(
@@ -804,12 +807,12 @@ async fn delete_components_for_entity(
 async fn get_component_by_id_for_entity(
     State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Path((entity_id, component_id)): Path<(String, String)>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, (StatusCode, &'static str)> {
     // Parse entity ID (prepend "entity:" prefix to base64 part from URL)
     let full_entity_id = format!("entity:{}", entity_id);
     let entity = match full_entity_id.parse::<Entity>() {
         Ok(e) => e,
-        Err(_) => return Err(StatusCode::BAD_REQUEST),
+        Err(_) => return Err((StatusCode::BAD_REQUEST, "invalid entity id")),
     };
 
     let component = match data_store.get_component(&entity, &component_id) {
@@ -823,7 +826,7 @@ async fn get_component_by_id_for_entity(
                 LogMetadata::rest_api(None),
             );
             logger.log_or_error(&log_entry);
-            return Err(StatusCode::NOT_FOUND);
+            return Err((StatusCode::NOT_FOUND, "not found"));
         }
     };
 
@@ -843,12 +846,12 @@ async fn update_component_by_id_for_entity(
     State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Path((entity_id, component_id)): Path<(String, String)>,
     Json(component): Json<Value>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, (StatusCode, &'static str)> {
     // Parse entity ID (prepend "entity:" prefix to base64 part from URL)
     let full_entity_id = format!("entity:{}", entity_id);
     let entity = match full_entity_id.parse::<Entity>() {
         Ok(e) => e,
-        Err(_) => return Err(StatusCode::BAD_REQUEST),
+        Err(_) => return Err((StatusCode::BAD_REQUEST, "invalid entity id")),
     };
 
     let old_data = data_store
@@ -869,7 +872,7 @@ async fn update_component_by_id_for_entity(
             LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
         );
         logger.log_or_error(&log_entry);
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error"));
     }
 
     let log_entry = LogEntry::new(
@@ -891,12 +894,12 @@ async fn patch_component_by_id_for_entity(
     State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Path((entity_id, component_id)): Path<(String, String)>,
     Json(patch): Json<Value>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, (StatusCode, &'static str)> {
     // Parse entity ID (prepend "entity:" prefix to base64 part from URL)
     let full_entity_id = format!("entity:{}", entity_id);
     let entity = match full_entity_id.parse::<Entity>() {
         Ok(e) => e,
-        Err(_) => return Err(StatusCode::BAD_REQUEST),
+        Err(_) => return Err((StatusCode::BAD_REQUEST, "invalid entity id")),
     };
 
     let mut component = patch.clone();
@@ -920,7 +923,7 @@ async fn patch_component_by_id_for_entity(
             LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
         );
         logger.log_or_error(&log_entry);
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error"));
     }
 
     let log_entry = LogEntry::new(
@@ -940,12 +943,12 @@ async fn patch_component_by_id_for_entity(
 async fn delete_component_by_id_for_entity(
     State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Path((entity_id, component_id)): Path<(String, String)>,
-) -> Result<StatusCode, StatusCode> {
+) -> Result<StatusCode, (StatusCode, &'static str)> {
     // Parse entity ID (prepend "entity:" prefix to base64 part from URL)
     let full_entity_id = format!("entity:{}", entity_id);
     let entity = match full_entity_id.parse::<Entity>() {
         Ok(e) => e,
-        Err(_) => return Err(StatusCode::BAD_REQUEST),
+        Err(_) => return Err((StatusCode::BAD_REQUEST, "invalid entity id")),
     };
 
     let deleted_data = data_store
@@ -963,7 +966,7 @@ async fn delete_component_by_id_for_entity(
             LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
         );
         logger.log_or_error(&log_entry);
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error"));
     }
 
     let log_entry = LogEntry::new(
@@ -1339,7 +1342,10 @@ mod tests {
             create_component_definition(State((logger, data_store)), Json(definition.clone()))
                 .await;
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            result.unwrap_err(),
+            (StatusCode::BAD_REQUEST, "invalid schema")
+        );
 
         let logs_after = read_log_entries(&log_path);
         assert_eq!(logs_after.len(), 1);
@@ -1483,7 +1489,7 @@ mod tests {
         )
         .await;
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), StatusCode::NOT_FOUND);
+        assert_eq!(result.unwrap_err(), (StatusCode::NOT_FOUND, "not found"));
 
         let logs_after = read_log_entries(&log_path);
         assert_eq!(logs_after.len(), 1);
@@ -1743,7 +1749,10 @@ mod tests {
         )
         .await;
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            result.unwrap_err(),
+            (StatusCode::BAD_REQUEST, "data validation failed")
+        );
 
         let logs_after = read_log_entries(&log_path);
         assert_eq!(logs_after.len(), 1);
@@ -1905,7 +1914,7 @@ mod tests {
         )
         .await;
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), StatusCode::NOT_FOUND);
+        assert_eq!(result.unwrap_err(), (StatusCode::NOT_FOUND, "not found"));
 
         let logs_after = read_log_entries(&log_path);
         assert_eq!(logs_after.len(), 1);
@@ -2087,7 +2096,10 @@ mod tests {
         )
         .await;
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), StatusCode::CONFLICT);
+        assert_eq!(
+            result.unwrap_err(),
+            (StatusCode::CONFLICT, "already exists")
+        );
 
         // Store should still have exactly one definition
         let definitions = data_store.list_component_definitions().unwrap();
@@ -2128,7 +2140,10 @@ mod tests {
         )
         .await;
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), StatusCode::CONFLICT);
+        assert_eq!(
+            result.unwrap_err(),
+            (StatusCode::CONFLICT, "already exists")
+        );
 
         // Store should still have exactly one component
         let components = data_store.list_components().unwrap();
@@ -2158,7 +2173,10 @@ mod tests {
 
         // Should fail validation due to missing 'type' or 'oneOf'
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            result.unwrap_err(),
+            (StatusCode::BAD_REQUEST, "invalid schema")
+        );
 
         // Nothing should be stored
         let definitions = data_store.list_component_definitions().unwrap();
@@ -2251,7 +2269,10 @@ mod tests {
         )
         .await;
         assert!(conflict_result.is_err());
-        assert_eq!(conflict_result.unwrap_err(), StatusCode::CONFLICT);
+        assert_eq!(
+            conflict_result.unwrap_err(),
+            (StatusCode::CONFLICT, "already exists")
+        );
 
         // Test 400 Bad Request for validation failure
         let invalid_def = invalid_component_definition();
@@ -2261,7 +2282,10 @@ mod tests {
         )
         .await;
         assert!(validation_result.is_err());
-        assert_eq!(validation_result.unwrap_err(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            validation_result.unwrap_err(),
+            (StatusCode::BAD_REQUEST, "invalid schema")
+        );
 
         // Test 404 Not Found for non-existent resource
         let not_found_result = get_component_definition_by_id(
@@ -2270,7 +2294,10 @@ mod tests {
         )
         .await;
         assert!(not_found_result.is_err());
-        assert_eq!(not_found_result.unwrap_err(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            not_found_result.unwrap_err(),
+            (StatusCode::NOT_FOUND, "not found")
+        );
 
         // Test 204 No Content for successful deletion
         let delete_result = delete_component_definition_by_id(
@@ -2391,7 +2418,7 @@ mod tests {
         );
         assert_eq!(
             not_found_result.unwrap_err(),
-            StatusCode::NOT_FOUND,
+            (StatusCode::NOT_FOUND, "not found"),
             "Should return 404 NOT_FOUND"
         );
 

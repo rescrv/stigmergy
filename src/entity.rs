@@ -450,7 +450,7 @@ pub struct CreateEntityResponse {
 async fn create_entity(
     State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Json(request): Json<CreateEntityRequest>,
-) -> Result<Json<CreateEntityResponse>, StatusCode> {
+) -> Result<Json<CreateEntityResponse>, (StatusCode, &'static str)> {
     let was_random = request.entity.is_none();
     let entity = match request.entity {
         Some(entity) => entity,
@@ -463,7 +463,10 @@ async fn create_entity(
                 LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
             logger.log_or_error(&log_entry);
-            StatusCode::INTERNAL_SERVER_ERROR
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to generate random entity",
+            )
         })?,
     };
 
@@ -482,8 +485,8 @@ async fn create_entity(
 
     if !result.success {
         return Err(match result.into_error() {
-            crate::DataStoreError::AlreadyExists => StatusCode::CONFLICT,
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
+            crate::DataStoreError::AlreadyExists => (StatusCode::CONFLICT, "entity already exists"),
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, "failed to create entity"),
         });
     }
 
@@ -510,7 +513,7 @@ async fn create_entity(
 async fn delete_entity(
     State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
     Path(entity_base64): Path<String>,
-) -> Result<StatusCode, StatusCode> {
+) -> Result<StatusCode, (StatusCode, &'static str)> {
     // Construct full entity string from base64 part
     let entity_string = format!("{}{}", ENTITY_PREFIX, entity_base64);
 
@@ -537,7 +540,7 @@ async fn delete_entity(
             if success {
                 Ok(StatusCode::NO_CONTENT)
             } else {
-                Err(StatusCode::NOT_FOUND)
+                Err((StatusCode::NOT_FOUND, "entity not found"))
             }
         }
         Err(_parse_error) => {
@@ -550,7 +553,7 @@ async fn delete_entity(
                 LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
             logger.log_or_error(&log_entry);
-            Err(StatusCode::BAD_REQUEST)
+            Err((StatusCode::BAD_REQUEST, "invalid entity id"))
         }
     }
 }
@@ -565,11 +568,11 @@ async fn delete_entity(
 /// * `Err(StatusCode::INTERNAL_SERVER_ERROR)` - If data store operation fails
 async fn list_entities(
     State((_logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
-) -> Result<Json<Vec<Entity>>, StatusCode> {
+) -> Result<Json<Vec<Entity>>, (StatusCode, &'static str)> {
     let entities = match data_store.list_entities() {
         Ok(entities) => entities,
         Err(_) => {
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, "failed to list entities"));
         }
     };
 
@@ -885,7 +888,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(result, Err(StatusCode::BAD_REQUEST));
+        assert_eq!(result, Err((StatusCode::BAD_REQUEST, "invalid entity id")));
     }
 
     #[tokio::test]
@@ -1061,7 +1064,7 @@ mod tests {
             Path(invalid_base64.to_string()),
         )
         .await;
-        assert_eq!(result, Err(StatusCode::BAD_REQUEST));
+        assert_eq!(result, Err((StatusCode::BAD_REQUEST, "invalid entity id")));
 
         // Check log file after operation
         let logs_after = read_log_entries(&log_path);
