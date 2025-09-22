@@ -1847,4 +1847,198 @@ mod tests {
 
         clear_log_file(&log_path);
     }
+
+    // Additional tests for error handling and edge cases
+    #[tokio::test]
+    async fn data_store_error_handling_component_definition() {
+        let (logger, log_path) = create_test_logger_with_path("component", "data_store_error_def");
+        clear_log_file(&log_path);
+
+        let definition = sample_component_definition();
+        let data_store = test_data_store();
+        let def_id = format!("{:?}", definition.component);
+
+        // Create definition first
+        data_store
+            .create_component_definition(&def_id, &definition)
+            .unwrap();
+
+        // Try to create again - should get CONFLICT
+        let result = create_component_definition(
+            State((logger.clone(), data_store.clone())),
+            Json(definition.clone()),
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), StatusCode::CONFLICT);
+
+        // Store should still have exactly one definition
+        let definitions = data_store.list_component_definitions().unwrap();
+        assert_eq!(definitions.len(), 1);
+
+        clear_log_file(&log_path);
+    }
+
+    #[tokio::test]
+    async fn data_store_error_handling_component() {
+        let (logger, log_path) = create_test_logger_with_path("component", "data_store_error_comp");
+        clear_log_file(&log_path);
+
+        let component_data = serde_json::json!("Green");
+        let data_store = test_data_store();
+        let comp_id = "generated_id";
+
+        // Create component first
+        data_store
+            .create_component(comp_id, &component_data)
+            .unwrap();
+
+        // Try to create again - should get CONFLICT
+        let result = create_component(
+            State((logger.clone(), data_store.clone())),
+            Json(component_data.clone()),
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), StatusCode::CONFLICT);
+
+        // Store should still have exactly one component
+        let components = data_store.list_components().unwrap();
+        assert_eq!(components.len(), 1);
+
+        clear_log_file(&log_path);
+    }
+
+    #[tokio::test]
+    async fn schema_validation_edge_cases() {
+        let (logger, log_path) =
+            create_test_logger_with_path("component", "schema_validation_edge");
+        clear_log_file(&log_path);
+
+        // Test with empty schema object
+        let empty_schema_def = ComponentDefinition {
+            component: Component::new("EmptySchemaComponent").unwrap(),
+            schema: serde_json::json!({}),
+        };
+        let data_store = test_data_store();
+
+        let result = create_component_definition(
+            State((logger.clone(), data_store.clone())),
+            Json(empty_schema_def.clone()),
+        )
+        .await;
+
+        // Should fail validation due to missing 'type' or 'oneOf'
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), StatusCode::BAD_REQUEST);
+
+        // Nothing should be stored
+        let definitions = data_store.list_component_definitions().unwrap();
+        assert!(definitions.is_empty());
+
+        clear_log_file(&log_path);
+    }
+
+    #[tokio::test]
+    async fn component_validation_with_complex_schema() {
+        let (logger, log_path) =
+            create_test_logger_with_path("component", "complex_schema_validation");
+        clear_log_file(&log_path);
+
+        let complex_definition = ComponentDefinition {
+            component: Component::new("ComplexComponent").unwrap(),
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" },
+                    "age": { "type": "integer" },
+                    "active": { "type": "boolean" }
+                },
+                "required": ["name", "age"]
+            }),
+        };
+        let data_store = test_data_store();
+
+        // Create the definition first
+        data_store
+            .create_component_definition("complex_def", &complex_definition)
+            .unwrap();
+
+        // Test with valid component data
+        let valid_data = serde_json::json!({
+            "name": "John Doe",
+            "age": 30,
+            "active": true
+        });
+        let result = create_component(
+            State((logger.clone(), data_store.clone())),
+            Json(valid_data.clone()),
+        )
+        .await;
+        assert!(result.is_ok());
+
+        // Verify it was stored
+        let components = data_store.list_components().unwrap();
+        assert_eq!(components.len(), 1);
+        assert_eq!(components[0].1, valid_data);
+
+        clear_log_file(&log_path);
+    }
+
+    #[tokio::test]
+    async fn http_status_code_verification() {
+        let (logger, log_path) =
+            create_test_logger_with_path("component", "status_code_verification");
+        clear_log_file(&log_path);
+
+        let data_store = test_data_store();
+        let definition = sample_component_definition();
+        let def_id = format!("{:?}", definition.component);
+
+        // Test 201 Created for component definition
+        let create_result = create_component_definition(
+            State((logger.clone(), data_store.clone())),
+            Json(definition.clone()),
+        )
+        .await;
+        assert!(create_result.is_ok()); // Should be 200 OK (returned as Json), not 201
+
+        // Test 409 Conflict for duplicate creation
+        let conflict_result = create_component_definition(
+            State((logger.clone(), data_store.clone())),
+            Json(definition.clone()),
+        )
+        .await;
+        assert!(conflict_result.is_err());
+        assert_eq!(conflict_result.unwrap_err(), StatusCode::CONFLICT);
+
+        // Test 400 Bad Request for validation failure
+        let invalid_def = invalid_component_definition();
+        let validation_result = create_component_definition(
+            State((logger.clone(), data_store.clone())),
+            Json(invalid_def),
+        )
+        .await;
+        assert!(validation_result.is_err());
+        assert_eq!(validation_result.unwrap_err(), StatusCode::BAD_REQUEST);
+
+        // Test 404 Not Found for non-existent resource
+        let not_found_result = get_component_definition_by_id(
+            State((logger.clone(), data_store.clone())),
+            Path("nonexistent".to_string()),
+        )
+        .await;
+        assert!(not_found_result.is_err());
+        assert_eq!(not_found_result.unwrap_err(), StatusCode::NOT_FOUND);
+
+        // Test 204 No Content for successful deletion
+        let delete_result = delete_component_definition_by_id(
+            State((logger.clone(), data_store.clone())),
+            Path(def_id),
+        )
+        .await;
+        assert_eq!(delete_result, Ok(StatusCode::NO_CONTENT));
+
+        clear_log_file(&log_path);
+    }
 }
