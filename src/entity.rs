@@ -48,7 +48,7 @@ use crate::{
 /// let parsed: Entity = entity_string.parse().unwrap();
 /// assert_eq!(entity, parsed);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Entity([u8; 32]);
 
 impl Entity {
@@ -345,6 +345,71 @@ impl FromStr for Entity {
 
         if decoded.len() != 32 {
             return Err(EntityParseError::InvalidLength);
+        }
+
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(&decoded);
+        Ok(Entity(bytes))
+    }
+}
+
+impl Serialize for Entity {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let encoded = encode_base64_url_safe(&self.0);
+        serializer.serialize_str(&encoded)
+    }
+}
+
+impl<'de> Deserialize<'de> for Entity {
+    fn deserialize<D>(deserializer: D) -> Result<Entity, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_str(EntityVisitor)
+    }
+}
+
+struct EntityVisitor;
+
+impl<'de> serde::de::Visitor<'de> for EntityVisitor {
+    type Value = Entity;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a base64 entity ID string (43 characters)")
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        // Handle both formats: base64-only and entity:base64
+        let base64_part = if value.starts_with(ENTITY_PREFIX) {
+            &value[ENTITY_PREFIX_LEN..]
+        } else {
+            value
+        };
+
+        // Validate length
+        if base64_part.len() != BASE64_ENCODED_LEN {
+            return Err(serde::de::Error::custom(format!(
+                "Entity base64 must be exactly {} characters, got {}",
+                BASE64_ENCODED_LEN,
+                base64_part.len()
+            )));
+        }
+
+        // Decode base64
+        let decoded = decode_base64_url_safe(base64_part)
+            .map_err(|e| serde::de::Error::custom(format!("Invalid base64: {}", e)))?;
+
+        if decoded.len() != 32 {
+            return Err(serde::de::Error::custom(format!(
+                "Decoded entity must be exactly 32 bytes, got {}",
+                decoded.len()
+            )));
         }
 
         let mut bytes = [0u8; 32];
