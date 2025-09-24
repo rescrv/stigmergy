@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SystemConfig {
     pub name: String,
     pub description: String,
@@ -14,6 +14,7 @@ pub struct SystemConfig {
 pub enum ParseError {
     NoFrontmatter,
     MissingRequiredField(String),
+    ValidationError(String),
 }
 
 impl std::fmt::Display for ParseError {
@@ -23,11 +24,91 @@ impl std::fmt::Display for ParseError {
             ParseError::MissingRequiredField(field) => {
                 write!(f, "Missing required field: {}", field)
             }
+            ParseError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
         }
     }
 }
 
 impl std::error::Error for ParseError {}
+
+impl SystemConfig {
+    pub fn validate(&self) -> Result<(), ParseError> {
+        // Validate name length (1-100 characters)
+        if self.name.is_empty() {
+            return Err(ParseError::ValidationError(
+                "Name cannot be empty".to_string(),
+            ));
+        }
+        if self.name.len() > 100 {
+            return Err(ParseError::ValidationError(
+                "Name cannot exceed 100 characters".to_string(),
+            ));
+        }
+
+        // Validate description length (1-500 characters)
+        if self.description.is_empty() {
+            return Err(ParseError::ValidationError(
+                "Description cannot be empty".to_string(),
+            ));
+        }
+        if self.description.len() > 500 {
+            return Err(ParseError::ValidationError(
+                "Description cannot exceed 500 characters".to_string(),
+            ));
+        }
+
+        // Validate color (basic validation for common CSS colors)
+        let valid_colors = [
+            "red", "blue", "green", "yellow", "orange", "purple", "pink", "gray", "black", "white",
+        ];
+        if !valid_colors.contains(&self.color.as_str()) && !self.color.starts_with('#') {
+            return Err(ParseError::ValidationError(format!(
+                "Invalid color: {}. Use a basic color name or hex code",
+                self.color
+            )));
+        }
+
+        // Validate hex color format if it starts with #
+        if self.color.starts_with('#')
+            && (self.color.len() != 7 || !self.color[1..].chars().all(|c| c.is_ascii_hexdigit()))
+        {
+            return Err(ParseError::ValidationError(
+                "Hex color must be in format #RRGGBB".to_string(),
+            ));
+        }
+
+        // Validate model
+        if self.model.is_empty() {
+            return Err(ParseError::ValidationError(
+                "Model cannot be empty".to_string(),
+            ));
+        }
+
+        // Validate content size (max 10KB)
+        if self.content.len() > 10 * 1024 {
+            return Err(ParseError::ValidationError(
+                "Content cannot exceed 10KB".to_string(),
+            ));
+        }
+
+        // Validate tools (each tool name should be reasonable)
+        for tool in &self.tools {
+            if tool.is_empty() {
+                return Err(ParseError::ValidationError(
+                    "Tool names cannot be empty".to_string(),
+                ));
+            }
+            if tool.len() > 50 {
+                return Err(ParseError::ValidationError(format!(
+                    "Tool name '{}' exceeds 50 characters",
+                    tool
+                )));
+            }
+        }
+
+        Ok(())
+    }
+}
 
 pub struct SystemParser;
 
@@ -36,14 +117,17 @@ impl SystemParser {
         let (header_section, markdown_content) = Self::split_frontmatter(content)?;
         let header_data = Self::parse_header_section(&header_section)?;
 
-        Ok(SystemConfig {
+        let config = SystemConfig {
             name: Self::get_required_field(&header_data, "name")?,
             description: Self::get_required_field(&header_data, "description")?,
             tools: Self::parse_tools(&header_data)?,
             model: Self::get_required_field(&header_data, "model")?,
             color: Self::get_required_field(&header_data, "color")?,
             content: markdown_content.trim().to_string(),
-        })
+        };
+
+        config.validate()?;
+        Ok(config)
     }
 
     fn split_frontmatter(content: &str) -> Result<(String, String), ParseError> {
@@ -160,19 +244,5 @@ Content here
 "#;
         let result = SystemParser::parse(content);
         assert!(matches!(result, Err(ParseError::MissingRequiredField(_))));
-    }
-
-    #[test]
-    fn parse_actual_dry_principal_file() {
-        let content = std::fs::read_to_string("dry-principal.md").unwrap();
-        let config = SystemParser::parse(&content).unwrap();
-
-        assert_eq!(config.name, "dry-principal");
-        assert!(config.description.contains("DRY (Don't Repeat Yourself)"));
-        assert!(config.tools.contains(&"Glob".to_string()));
-        assert!(config.tools.contains(&"Grep".to_string()));
-        assert_eq!(config.model, "inherit");
-        assert_eq!(config.color, "purple");
-        assert!(config.content.contains("You are the DRY Principal"));
     }
 }

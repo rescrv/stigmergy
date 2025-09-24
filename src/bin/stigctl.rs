@@ -7,8 +7,10 @@ use std::path::Path;
 
 use stigmergy::{
     Component, ComponentDefinition, ComponentListItem, CreateComponentRequest,
-    CreateComponentResponse, CreateEntityRequest, CreateEntityResponse, Entity, LogEntry,
-    LogOperation, cli_utils, component_utils, http_utils,
+    CreateComponentResponse, CreateEntityRequest, CreateEntityResponse,
+    CreateSystemFromMarkdownRequest, CreateSystemRequest, CreateSystemResponse, Entity, LogEntry,
+    LogOperation, System, SystemConfig, SystemId, SystemListItem, cli_utils, component_utils,
+    http_utils,
 };
 
 #[derive(CommandLine, Default, PartialEq, Eq)]
@@ -24,6 +26,12 @@ Commands:
   entity create                                Create a new entity
   entity list                                  List all entities
   entity delete <entity-id>                    Delete an entity
+  system create <config-json>                 Create a system from config
+  system create-from-md <file.md>             Create a system from markdown file
+  system list                                  List all systems
+  system get <system-id>                       Get a system by ID
+  system update <system-id> <config-json>     Update a system
+  system delete <system-id>                   Delete a system
   componentdefinition create <name> <schema>   Create a component definition
   componentdefinition list                     List all component definitions
   componentdefinition get <id>                 Get a component definition by ID
@@ -77,6 +85,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             handle_entity_command(&free[1..], &client).await;
         }
+        "system" => {
+            if free.len() < 2 {
+                cli_utils::exit_with_usage_error(
+                    "system command requires a subcommand",
+                    "Usage: stigctl system <create|create-from-md|list|get|update|delete> [args...]",
+                );
+            }
+            handle_system_command(&free[1..], &client).await;
+        }
         "componentdefinition" => {
             if free.len() < 2 {
                 cli_utils::exit_with_usage_error(
@@ -97,7 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => {
             cli_utils::exit_with_error(&format!(
-                "Unknown command '{}'. Available commands: apply, entity, componentdefinition, component",
+                "Unknown command '{}'. Available commands: apply, entity, system, componentdefinition, component",
                 free[0]
             ));
         }
@@ -150,7 +167,9 @@ async fn handle_entity_command(args: &[String], client: &http_utils::StigmergyCl
             });
 
             // Extract base64 part (skip "entity:" prefix) for URL path
-            let base64_part = &entity_id_str[7..]; // Skip "entity:" prefix
+            let base64_part = entity_id_str.strip_prefix("entity:").unwrap_or_else(|| {
+                cli_utils::exit_with_error(&format!("Invalid entity ID format: {}", entity_id_str))
+            });
             let path = format!("entity/{}", base64_part);
             http_utils::execute_or_exit(|| client.delete(&path), "Failed to delete entity").await;
             println!("Deleted entity: {}", entity_id);
@@ -158,6 +177,165 @@ async fn handle_entity_command(args: &[String], client: &http_utils::StigmergyCl
         _ => {
             cli_utils::exit_with_error(&format!(
                 "Unknown entity subcommand '{}'. Available subcommands: create, list, delete",
+                args[0]
+            ));
+        }
+    }
+}
+
+async fn handle_system_command(args: &[String], client: &http_utils::StigmergyClient) {
+    match args[0].as_str() {
+        "create" => {
+            if args.len() < 2 {
+                cli_utils::exit_with_usage_error(
+                    "create command requires config JSON",
+                    r#"Usage: stigctl system create <config-json>
+Example: stigctl system create '{"name":"test","description":"A test system","tools":["Read","Write"],"model":"inherit","color":"blue","content":"You are a test system."}}'"#,
+                );
+            }
+
+            let config_str = &args[1];
+            let config: SystemConfig = serde_json::from_str(config_str).unwrap_or_else(|e| {
+                cli_utils::exit_with_error(&format!("Invalid config JSON: {}", e))
+            });
+
+            let request = CreateSystemRequest { config };
+
+            let response = http_utils::execute_or_exit(
+                || client.post::<CreateSystemRequest, CreateSystemResponse>("system", &request),
+                "Failed to create system",
+            )
+            .await;
+
+            println!("Created system:");
+            cli_utils::print_json_or_exit(&response.system, "system");
+        }
+        "create-from-md" => {
+            if args.len() < 2 {
+                cli_utils::exit_with_usage_error(
+                    "create-from-md command requires a markdown file path",
+                    "Usage: stigctl system create-from-md <file.md>",
+                );
+            }
+
+            let file_path = &args[1];
+            let content = std::fs::read_to_string(file_path).unwrap_or_else(|e| {
+                cli_utils::exit_with_error(&format!("Failed to read file {}: {}", file_path, e))
+            });
+
+            let request = CreateSystemFromMarkdownRequest { content };
+
+            let response = http_utils::execute_or_exit(
+                || {
+                    client.post::<CreateSystemFromMarkdownRequest, CreateSystemResponse>(
+                        "system/from-markdown",
+                        &request,
+                    )
+                },
+                "Failed to create system from markdown",
+            )
+            .await;
+
+            println!("Created system from markdown:");
+            cli_utils::print_json_or_exit(&response.system, "system");
+        }
+        "list" => {
+            let systems = http_utils::execute_or_exit(
+                || client.get::<Vec<SystemListItem>>("system"),
+                "Failed to list systems",
+            )
+            .await;
+
+            cli_utils::print_json_or_exit(&systems, "systems");
+        }
+        "get" => {
+            if args.len() < 2 {
+                cli_utils::exit_with_usage_error(
+                    "get command requires a system ID",
+                    "Usage: stigctl system get <system-id>",
+                );
+            }
+
+            let system_id_str = &args[1];
+            let system_id: SystemId = system_id_str.parse().unwrap_or_else(|_| {
+                cli_utils::exit_with_error(&format!("Invalid system ID format: {}", system_id_str))
+            });
+
+            // Extract base64 part (skip "system:" prefix) for URL path
+            let base64_part = system_id_str.strip_prefix("system:").unwrap_or_else(|| {
+                cli_utils::exit_with_error(&format!("Invalid system ID format: {}", system_id_str))
+            });
+            let path = format!("system/{}", base64_part);
+            let system = http_utils::execute_or_exit(
+                || client.get::<System>(&path),
+                &format!("Failed to get system {}", system_id),
+            )
+            .await;
+
+            cli_utils::print_json_or_exit(&system, "system");
+        }
+        "update" => {
+            if args.len() < 3 {
+                cli_utils::exit_with_usage_error(
+                    "update command requires system ID and config JSON",
+                    "Usage: stigctl system update <system-id> <config-json>",
+                );
+            }
+
+            let system_id_str = &args[1];
+            let config_str = &args[2];
+
+            let system_id: SystemId = system_id_str.parse().unwrap_or_else(|_| {
+                cli_utils::exit_with_error(&format!("Invalid system ID format: {}", system_id_str))
+            });
+
+            let config: SystemConfig = serde_json::from_str(config_str).unwrap_or_else(|e| {
+                cli_utils::exit_with_error(&format!("Invalid config JSON: {}", e))
+            });
+
+            // Extract base64 part (skip "system:" prefix) for URL path
+            let base64_part = system_id_str.strip_prefix("system:").unwrap_or_else(|| {
+                cli_utils::exit_with_error(&format!("Invalid system ID format: {}", system_id_str))
+            });
+            let path = format!("system/{}", base64_part);
+            let system = http_utils::execute_or_exit(
+                || client.put::<SystemConfig, System>(&path, &config),
+                &format!("Failed to update system {}", system_id),
+            )
+            .await;
+
+            println!("Updated system:");
+            cli_utils::print_json_or_exit(&system, "system");
+        }
+        "delete" => {
+            if args.len() < 2 {
+                cli_utils::exit_with_usage_error(
+                    "delete command requires a system ID",
+                    "Usage: stigctl system delete <system-id>",
+                );
+            }
+
+            let system_id_str = &args[1];
+            let system_id: SystemId = system_id_str.parse().unwrap_or_else(|_| {
+                cli_utils::exit_with_error(&format!("Invalid system ID format: {}", system_id_str))
+            });
+
+            // Extract base64 part (skip "system:" prefix) for URL path
+            let base64_part = system_id_str.strip_prefix("system:").unwrap_or_else(|| {
+                cli_utils::exit_with_error(&format!("Invalid system ID format: {}", system_id_str))
+            });
+            let path = format!("system/{}", base64_part);
+            http_utils::execute_or_exit(
+                || client.delete(&path),
+                &format!("Failed to delete system {}", system_id),
+            )
+            .await;
+
+            println!("Deleted system: {}", system_id);
+        }
+        _ => {
+            cli_utils::exit_with_error(&format!(
+                "Unknown system subcommand '{}'. Available subcommands: create, create-from-md, list, get, update, delete",
                 args[0]
             ));
         }
@@ -571,7 +749,49 @@ async fn apply_log_entry(
             let response = client.delete(&url).send().await?;
             handle_response(response, "ComponentDeleteAll").await?;
         }
-        LogOperation::ComponentDefinitionGet { .. } | LogOperation::ComponentGet { .. } => {
+        LogOperation::SystemCreate { config, .. } => {
+            let url = format!("{}/api/v1/system", base_url);
+            if let Some(config) = config {
+                let request = CreateSystemRequest {
+                    config: config.clone(),
+                };
+                let response = client.post(&url).json(&request).send().await?;
+                handle_response(response, "SystemCreate").await?;
+            } else {
+                return Err("SystemCreate operation missing config".into());
+            }
+        }
+        LogOperation::SystemUpdate {
+            system_id,
+            new_config,
+            ..
+        } => {
+            let url = format!("{}/api/v1/system/{}", base_url, system_id);
+            let response = client.put(&url).json(new_config).send().await?;
+            handle_response(response, "SystemUpdate").await?;
+        }
+        LogOperation::SystemPatch {
+            system_id,
+            patch_data,
+            ..
+        } => {
+            let url = format!("{}/api/v1/system/{}", base_url, system_id);
+            let response = client.patch(&url).json(patch_data).send().await?;
+            handle_response(response, "SystemPatch").await?;
+        }
+        LogOperation::SystemDelete { system_id, .. } => {
+            let url = format!("{}/api/v1/system/{}", base_url, system_id);
+            let response = client.delete(&url).send().await?;
+            handle_response(response, "SystemDelete").await?;
+        }
+        LogOperation::SystemDeleteAll { .. } => {
+            let url = format!("{}/api/v1/system", base_url);
+            let response = client.delete(&url).send().await?;
+            handle_response(response, "SystemDeleteAll").await?;
+        }
+        LogOperation::ComponentDefinitionGet { .. }
+        | LogOperation::ComponentGet { .. }
+        | LogOperation::SystemGet { .. } => {
             println!(
                 "  Skipping read-only operation: {}",
                 log_entry.operation_type()

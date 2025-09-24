@@ -2,7 +2,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use crate::{ComponentDefinition, Entity};
+use crate::{ComponentDefinition, Entity, System, SystemId};
 
 /// Type alias for component key-value pairs returned by list operations
 pub type ComponentList = Vec<((Entity, String), Value)>;
@@ -58,6 +58,14 @@ pub trait DataStore: Send + Sync {
         entity: &Entity,
     ) -> Result<Vec<(String, Value)>, DataStoreError>;
     fn list_components(&self) -> Result<ComponentList, DataStoreError>;
+
+    // System operations
+    fn create_system(&self, system: &System) -> Result<(), DataStoreError>;
+    fn get_system(&self, system_id: &SystemId) -> Result<Option<System>, DataStoreError>;
+    fn update_system(&self, system: &System) -> Result<bool, DataStoreError>;
+    fn delete_system(&self, system_id: &SystemId) -> Result<bool, DataStoreError>;
+    fn delete_all_systems(&self) -> Result<u32, DataStoreError>;
+    fn list_systems(&self) -> Result<Vec<System>, DataStoreError>;
 }
 
 /// Errors that can occur during data store operations
@@ -89,6 +97,7 @@ pub struct InMemoryDataStore {
     entities: Mutex<HashMap<String, Entity>>,
     component_definitions: Mutex<HashMap<String, ComponentDefinition>>,
     components: Mutex<HashMap<(Entity, String), Value>>,
+    systems: Mutex<HashMap<SystemId, System>>,
 }
 
 impl InMemoryDataStore {
@@ -97,6 +106,7 @@ impl InMemoryDataStore {
             entities: Mutex::new(HashMap::new()),
             component_definitions: Mutex::new(HashMap::new()),
             components: Mutex::new(HashMap::new()),
+            systems: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -301,6 +311,50 @@ impl DataStore for InMemoryDataStore {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect())
+    }
+
+    fn create_system(&self, system: &System) -> Result<(), DataStoreError> {
+        let mut systems = self.systems.lock().unwrap();
+
+        if systems.contains_key(&system.id) {
+            return Err(DataStoreError::AlreadyExists);
+        }
+
+        systems.insert(system.id, system.clone());
+        Ok(())
+    }
+
+    fn get_system(&self, system_id: &SystemId) -> Result<Option<System>, DataStoreError> {
+        let systems = self.systems.lock().unwrap();
+        Ok(systems.get(system_id).cloned())
+    }
+
+    fn update_system(&self, system: &System) -> Result<bool, DataStoreError> {
+        let mut systems = self.systems.lock().unwrap();
+
+        if let std::collections::hash_map::Entry::Occupied(mut e) = systems.entry(system.id) {
+            e.insert(system.clone());
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn delete_system(&self, system_id: &SystemId) -> Result<bool, DataStoreError> {
+        let mut systems = self.systems.lock().unwrap();
+        Ok(systems.remove(system_id).is_some())
+    }
+
+    fn delete_all_systems(&self) -> Result<u32, DataStoreError> {
+        let mut systems = self.systems.lock().unwrap();
+        let count = systems.len() as u32;
+        systems.clear();
+        Ok(count)
+    }
+
+    fn list_systems(&self) -> Result<Vec<System>, DataStoreError> {
+        let systems = self.systems.lock().unwrap();
+        Ok(systems.values().cloned().collect())
     }
 }
 
@@ -541,5 +595,114 @@ mod tests {
             store.get_component(&entity2, "same_id").unwrap(),
             Some(comp_data2.clone())
         );
+    }
+
+    fn test_system() -> System {
+        use crate::SystemConfig;
+        let config = SystemConfig {
+            name: "test-system".to_string(),
+            description: "A test system".to_string(),
+            tools: vec!["Read".to_string(), "Write".to_string()],
+            model: "inherit".to_string(),
+            color: "blue".to_string(),
+            content: "You are a test system.".to_string(),
+        };
+        System::with_id(SystemId::new([1u8; 32]), config)
+    }
+
+    #[test]
+    fn system_create_and_get() {
+        let store = InMemoryDataStore::new();
+        let system = test_system();
+        let system_id = system.id;
+
+        // Create system
+        assert!(store.create_system(&system).is_ok());
+
+        // Get system
+        let retrieved = store.get_system(&system_id).unwrap();
+        assert_eq!(retrieved, Some(system.clone()));
+
+        // Try to create duplicate
+        assert!(matches!(
+            store.create_system(&system),
+            Err(DataStoreError::AlreadyExists)
+        ));
+    }
+
+    #[test]
+    fn system_update() {
+        let store = InMemoryDataStore::new();
+        let mut system = test_system();
+        let system_id = system.id;
+
+        // Create system
+        store.create_system(&system).unwrap();
+
+        // Update system
+        system.config.name = "updated-system".to_string();
+        assert!(store.update_system(&system).unwrap());
+
+        // Verify update
+        let retrieved = store.get_system(&system_id).unwrap().unwrap();
+        assert_eq!(retrieved.config.name, "updated-system");
+
+        // Try to update non-existent system
+        let non_existent_system = System::with_id(SystemId::new([2u8; 32]), system.config.clone());
+        assert!(!store.update_system(&non_existent_system).unwrap());
+    }
+
+    #[test]
+    fn system_delete() {
+        let store = InMemoryDataStore::new();
+        let system = test_system();
+        let system_id = system.id;
+
+        // Create and delete system
+        store.create_system(&system).unwrap();
+        assert!(store.delete_system(&system_id).unwrap());
+
+        // Verify deleted
+        assert_eq!(store.get_system(&system_id).unwrap(), None);
+
+        // Delete non-existent
+        assert!(!store.delete_system(&system_id).unwrap());
+    }
+
+    #[test]
+    fn system_delete_all() {
+        let store = InMemoryDataStore::new();
+        let system1 = test_system();
+        let mut system2 = test_system();
+        system2.id = SystemId::new([2u8; 32]);
+
+        // Create systems
+        store.create_system(&system1).unwrap();
+        store.create_system(&system2).unwrap();
+
+        // Delete all
+        assert_eq!(store.delete_all_systems().unwrap(), 2);
+
+        // Verify empty
+        assert!(store.list_systems().unwrap().is_empty());
+    }
+
+    #[test]
+    fn system_list() {
+        let store = InMemoryDataStore::new();
+        let system1 = test_system();
+        let mut system2 = test_system();
+        system2.id = SystemId::new([2u8; 32]);
+        system2.config.name = "system2".to_string();
+
+        // Create systems
+        store.create_system(&system1).unwrap();
+        store.create_system(&system2).unwrap();
+
+        // List systems
+        let systems = store.list_systems().unwrap();
+        assert_eq!(systems.len(), 2);
+        assert!(systems.contains(&system1));
+        assert!(systems.contains(&system2));
     }
 }

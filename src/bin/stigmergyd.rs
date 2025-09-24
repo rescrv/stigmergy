@@ -7,7 +7,10 @@ use axum::Router;
 use tokio::net::TcpListener;
 use tokio::signal;
 
-use stigmergy::{DurableLogger, InMemoryDataStore, create_component_router, create_entity_router};
+use stigmergy::{
+    DurableLogger, InMemoryDataStore, create_component_router, create_entity_router,
+    create_system_router,
+};
 
 #[derive(CommandLine, Default, PartialEq, Eq)]
 struct Args {
@@ -42,6 +45,16 @@ API ENDPOINTS:
     Entity Management:
       POST   /api/v1/entity              Create a new entity
       DELETE /api/v1/entity/{id}         Delete an entity
+
+    System Management:
+      GET    /api/v1/system              List all systems
+      POST   /api/v1/system              Create a system
+      POST   /api/v1/system/from-markdown Create system from markdown
+      GET    /api/v1/system/{id}         Get a specific system
+      PUT    /api/v1/system/{id}         Update a system
+      PATCH  /api/v1/system/{id}         Patch a system
+      DELETE /api/v1/system/{id}         Delete a system
+      DELETE /api/v1/system              Delete all systems
 
     Component Definitions:
       GET    /api/v1/componentdefinition       List all definitions
@@ -89,10 +102,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create routers
     let entity_router = create_entity_router(logger.clone(), data_store.clone());
     let component_router = create_component_router(logger.clone(), data_store.clone());
+    let system_router = create_system_router(logger.clone(), data_store.clone());
 
     let app = Router::new()
         .nest("/api/v1", entity_router)
-        .nest("/api/v1", component_router);
+        .nest("/api/v1", component_router)
+        .nest("/api/v1", system_router);
 
     // Bind to address
     let addr = format!("{}:{}", config.host, config.port);
@@ -175,6 +190,16 @@ fn print_api_endpoints() {
     println!("  Entity Management:");
     println!("    POST   /api/v1/entity              Create a new entity");
     println!("    DELETE /api/v1/entity/{{id}}         Delete an entity");
+    println!();
+    println!("  System Management:");
+    println!("    GET    /api/v1/system              List all systems");
+    println!("    POST   /api/v1/system              Create a system");
+    println!("    POST   /api/v1/system/from-markdown Create system from markdown");
+    println!("    GET    /api/v1/system/{{id}}         Get a specific system");
+    println!("    PUT    /api/v1/system/{{id}}         Update a system");
+    println!("    PATCH  /api/v1/system/{{id}}         Patch a system");
+    println!("    DELETE /api/v1/system/{{id}}         Delete a system");
+    println!("    DELETE /api/v1/system              Delete all systems");
     println!();
     println!("  Component Definitions:");
     println!("    GET    /api/v1/componentdefinition       List all definitions");

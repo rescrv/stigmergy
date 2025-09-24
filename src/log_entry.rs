@@ -101,6 +101,35 @@ pub enum LogOperation {
         found: bool,
     },
 
+    // System operations
+    SystemCreate {
+        system_id: String,
+        config: Option<crate::SystemConfig>,
+        success: bool,
+    },
+    SystemUpdate {
+        system_id: String,
+        old_config: Option<crate::SystemConfig>,
+        new_config: crate::SystemConfig,
+        success: bool,
+    },
+    SystemPatch {
+        system_id: String,
+        patch_data: Value,
+        success: bool,
+    },
+    SystemDelete {
+        system_id: String,
+        success: bool,
+    },
+    SystemDeleteAll {
+        count_deleted: u32,
+    },
+    SystemGet {
+        system_id: String,
+        success: bool,
+    },
+
     // Validation operations
     ValidationPerformed {
         target_type: ValidationType,
@@ -218,6 +247,12 @@ impl LogEntry {
             LogOperation::ComponentDelete { .. } => "ComponentDelete",
             LogOperation::ComponentDeleteAll { .. } => "ComponentDeleteAll",
             LogOperation::ComponentGet { .. } => "ComponentGet",
+            LogOperation::SystemCreate { .. } => "SystemCreate",
+            LogOperation::SystemUpdate { .. } => "SystemUpdate",
+            LogOperation::SystemPatch { .. } => "SystemPatch",
+            LogOperation::SystemDelete { .. } => "SystemDelete",
+            LogOperation::SystemDeleteAll { .. } => "SystemDeleteAll",
+            LogOperation::SystemGet { .. } => "SystemGet",
             LogOperation::ValidationPerformed { .. } => "ValidationPerformed",
             LogOperation::SchemaGeneration { .. } => "SchemaGeneration",
         }
@@ -270,6 +305,18 @@ impl LogEntry {
                 component_id: Some(component_id),
                 ..
             } => Some(component_id.clone()),
+            _ => None,
+        }
+    }
+
+    /// Returns the system ID if this operation involves a system
+    pub fn system_id(&self) -> Option<String> {
+        match &self.operation {
+            LogOperation::SystemCreate { system_id, .. }
+            | LogOperation::SystemUpdate { system_id, .. }
+            | LogOperation::SystemPatch { system_id, .. }
+            | LogOperation::SystemDelete { system_id, .. }
+            | LogOperation::SystemGet { system_id, .. } => Some(system_id.clone()),
             _ => None,
         }
     }
@@ -675,9 +722,20 @@ impl DurableLogger {
                 Ok(())
             }
 
+            // System operations - currently no-op since we don't have data store integration yet
+            LogOperation::SystemCreate { .. }
+            | LogOperation::SystemUpdate { .. }
+            | LogOperation::SystemPatch { .. }
+            | LogOperation::SystemDelete { .. }
+            | LogOperation::SystemDeleteAll { .. } => {
+                // Skip system operations until data store integration is implemented
+                Ok(())
+            }
+
             // These operations are read-only or metadata, so we skip them in replay
             LogOperation::ComponentDefinitionGet { .. }
             | LogOperation::ComponentGet { .. }
+            | LogOperation::SystemGet { .. }
             | LogOperation::ValidationPerformed { .. }
             | LogOperation::SchemaGeneration { .. } => {
                 // Skip read-only operations and metadata
