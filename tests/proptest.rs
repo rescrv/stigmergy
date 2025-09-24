@@ -11,15 +11,15 @@ use reqwest::StatusCode;
 use serde_json::{Value, json};
 
 use stigmergy::{
-    Component, ComponentDefinition, CreateComponentRequest, CreateEntityRequest, DurableLogger,
-    Entity, InMemoryDataStore, create_component_router, create_entity_router,
+    Component, ComponentDefinition, CreateComponentRequest, CreateEntityRequest, Entity,
+    InMemoryDataStore, SavefileManager, create_component_router, create_entity_router,
 };
 
 /// Test infrastructure for property testing the stigmergy API
 pub struct ApiTestServer {
     pub server: TestServer,
     pub data_store: Arc<InMemoryDataStore>,
-    pub logger: Arc<DurableLogger>,
+    pub logger: Arc<SavefileManager>,
     pub log_path: PathBuf,
 }
 
@@ -39,7 +39,7 @@ impl ApiTestServer {
         let pid = process::id();
         let log_path = PathBuf::from(format!("prop_test_{}_{}.jsonl", pid, timestamp));
 
-        let logger = Arc::new(DurableLogger::new(log_path.clone()));
+        let logger = Arc::new(SavefileManager::new(log_path.clone()));
         let data_store = Arc::new(InMemoryDataStore::new());
 
         let app = Router::new()

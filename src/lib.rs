@@ -3,7 +3,7 @@ mod data_operations;
 mod data_store;
 mod entity;
 mod json_schema;
-mod log_entry;
+mod savefile;
 mod system;
 mod system_parser;
 mod test_utils;
@@ -24,8 +24,8 @@ pub use entity::{
     CreateEntityRequest, CreateEntityResponse, Entity, EntityParseError, create_entity_router,
 };
 pub use json_schema::JsonSchema;
-pub use log_entry::{
-    DurableLogger, LogEntry, LogMetadata, LogOperation, OperationStatus, ReplayResult,
+pub use savefile::{
+    OperationStatus, RestoreResult, SaveEntry, SaveMetadata, SaveOperation, SavefileManager,
     ValidationResult, ValidationType,
 };
 pub use system::{

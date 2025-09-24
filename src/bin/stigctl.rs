@@ -8,8 +8,8 @@ use std::path::Path;
 use stigmergy::{
     Component, ComponentDefinition, ComponentListItem, CreateComponentRequest,
     CreateComponentResponse, CreateEntityRequest, CreateEntityResponse,
-    CreateSystemFromMarkdownRequest, CreateSystemRequest, CreateSystemResponse, Entity, LogEntry,
-    LogOperation, System, SystemConfig, SystemId, SystemListItem, cli_utils, component_utils,
+    CreateSystemFromMarkdownRequest, CreateSystemRequest, CreateSystemResponse, Entity, SaveEntry,
+    SaveOperation, System, SystemConfig, SystemId, SystemListItem, cli_utils, component_utils,
     http_utils,
 };
 
@@ -619,7 +619,7 @@ async fn apply_jsonl_file(
             continue;
         }
 
-        match apply_log_entry(&client, base_url, &line, line_num + 1).await {
+        match apply_save_entry(&client, base_url, &line, line_num + 1).await {
             Ok(()) => {
                 success_count += 1;
                 println!("✓ Line {}: Applied successfully", line_num + 1);
@@ -643,32 +643,32 @@ async fn apply_jsonl_file(
     Ok(())
 }
 
-async fn apply_log_entry(
+async fn apply_save_entry(
     client: &reqwest::Client,
     base_url: &str,
     line: &str,
     line_num: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let log_entry: LogEntry = serde_json::from_str(line)
+    let save_entry: SaveEntry = serde_json::from_str(line)
         .map_err(|e| format!("Failed to parse JSON at line {}: {}", line_num, e))?;
 
-    match &log_entry.operation {
-        LogOperation::EntityCreate { entity, .. } => {
+    match &save_entry.operation {
+        SaveOperation::EntityCreate { entity, .. } => {
             let url = format!("{}/api/v1/entity", base_url);
             let response = client.post(&url).json(entity).send().await?;
             handle_response(response, "EntityCreate").await?;
         }
-        LogOperation::EntityDelete { entity_id, .. } => {
+        SaveOperation::EntityDelete { entity_id, .. } => {
             let url = format!("{}/api/v1/entity/{}", base_url, entity_id);
             let response = client.delete(&url).send().await?;
             handle_response(response, "EntityDelete").await?;
         }
-        LogOperation::ComponentDefinitionCreate { definition, .. } => {
+        SaveOperation::ComponentDefinitionCreate { definition, .. } => {
             let url = format!("{}/api/v1/componentdefinition", base_url);
             let response = client.post(&url).json(definition).send().await?;
             handle_response(response, "ComponentDefinitionCreate").await?;
         }
-        LogOperation::ComponentDefinitionUpdate {
+        SaveOperation::ComponentDefinitionUpdate {
             definition_id,
             new_definition,
             ..
@@ -677,7 +677,7 @@ async fn apply_log_entry(
             let response = client.put(&url).json(new_definition).send().await?;
             handle_response(response, "ComponentDefinitionUpdate").await?;
         }
-        LogOperation::ComponentDefinitionPatch {
+        SaveOperation::ComponentDefinitionPatch {
             definition_id,
             patch_data,
             ..
@@ -686,17 +686,17 @@ async fn apply_log_entry(
             let response = client.patch(&url).json(patch_data).send().await?;
             handle_response(response, "ComponentDefinitionPatch").await?;
         }
-        LogOperation::ComponentDefinitionDelete { definition_id, .. } => {
+        SaveOperation::ComponentDefinitionDelete { definition_id, .. } => {
             let url = format!("{}/api/v1/componentdefinition/{}", base_url, definition_id);
             let response = client.delete(&url).send().await?;
             handle_response(response, "ComponentDefinitionDelete").await?;
         }
-        LogOperation::ComponentDefinitionDeleteAll { .. } => {
+        SaveOperation::ComponentDefinitionDeleteAll { .. } => {
             let url = format!("{}/api/v1/componentdefinition", base_url);
             let response = client.delete(&url).send().await?;
             handle_response(response, "ComponentDefinitionDeleteAll").await?;
         }
-        LogOperation::ComponentCreate {
+        SaveOperation::ComponentCreate {
             entity_id,
             component_id: _,
             component_data,
@@ -706,7 +706,7 @@ async fn apply_log_entry(
             let response = client.post(&url).json(component_data).send().await?;
             handle_response(response, "ComponentCreate").await?;
         }
-        LogOperation::ComponentUpdate {
+        SaveOperation::ComponentUpdate {
             entity_id,
             component_id,
             new_data,
@@ -719,7 +719,7 @@ async fn apply_log_entry(
             let response = client.put(&url).json(new_data).send().await?;
             handle_response(response, "ComponentUpdate").await?;
         }
-        LogOperation::ComponentPatch {
+        SaveOperation::ComponentPatch {
             entity_id,
             component_id,
             patch_data,
@@ -732,7 +732,7 @@ async fn apply_log_entry(
             let response = client.patch(&url).json(patch_data).send().await?;
             handle_response(response, "ComponentPatch").await?;
         }
-        LogOperation::ComponentDelete {
+        SaveOperation::ComponentDelete {
             entity_id,
             component_id,
             ..
@@ -744,12 +744,12 @@ async fn apply_log_entry(
             let response = client.delete(&url).send().await?;
             handle_response(response, "ComponentDelete").await?;
         }
-        LogOperation::ComponentDeleteAll { .. } => {
+        SaveOperation::ComponentDeleteAll { .. } => {
             let url = format!("{}/api/v1/component", base_url);
             let response = client.delete(&url).send().await?;
             handle_response(response, "ComponentDeleteAll").await?;
         }
-        LogOperation::SystemCreate { config, .. } => {
+        SaveOperation::SystemCreate { config, .. } => {
             let url = format!("{}/api/v1/system", base_url);
             if let Some(config) = config {
                 let request = CreateSystemRequest {
@@ -761,7 +761,7 @@ async fn apply_log_entry(
                 return Err("SystemCreate operation missing config".into());
             }
         }
-        LogOperation::SystemUpdate {
+        SaveOperation::SystemUpdate {
             system_id,
             new_config,
             ..
@@ -770,7 +770,7 @@ async fn apply_log_entry(
             let response = client.put(&url).json(new_config).send().await?;
             handle_response(response, "SystemUpdate").await?;
         }
-        LogOperation::SystemPatch {
+        SaveOperation::SystemPatch {
             system_id,
             patch_data,
             ..
@@ -779,36 +779,36 @@ async fn apply_log_entry(
             let response = client.patch(&url).json(patch_data).send().await?;
             handle_response(response, "SystemPatch").await?;
         }
-        LogOperation::SystemDelete { system_id, .. } => {
+        SaveOperation::SystemDelete { system_id, .. } => {
             let url = format!("{}/api/v1/system/{}", base_url, system_id);
             let response = client.delete(&url).send().await?;
             handle_response(response, "SystemDelete").await?;
         }
-        LogOperation::SystemDeleteAll { .. } => {
+        SaveOperation::SystemDeleteAll { .. } => {
             let url = format!("{}/api/v1/system", base_url);
             let response = client.delete(&url).send().await?;
             handle_response(response, "SystemDeleteAll").await?;
         }
-        LogOperation::ComponentDefinitionGet { .. }
-        | LogOperation::ComponentGet { .. }
-        | LogOperation::SystemGet { .. } => {
+        SaveOperation::ComponentDefinitionGet { .. }
+        | SaveOperation::ComponentGet { .. }
+        | SaveOperation::SystemGet { .. } => {
             println!(
                 "  Skipping read-only operation: {}",
-                log_entry.operation_type()
+                save_entry.operation_type()
             );
             return Ok(());
         }
-        LogOperation::ValidationPerformed { .. } => {
+        SaveOperation::ValidationPerformed { .. } => {
             println!(
                 "  Skipping validation operation: {}",
-                log_entry.operation_type()
+                save_entry.operation_type()
             );
             return Ok(());
         }
-        LogOperation::SchemaGeneration { .. } => {
+        SaveOperation::SchemaGeneration { .. } => {
             println!(
                 "  Skipping schema generation operation: {}",
-                log_entry.operation_type()
+                save_entry.operation_type()
             );
             return Ok(());
         }

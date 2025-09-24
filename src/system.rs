@@ -14,8 +14,8 @@ use serde_json::Value;
 use std::sync::Arc;
 
 use crate::{
-    DataStore, DurableLogger, LogEntry, LogMetadata, LogOperation, OperationStatus, SystemConfig,
-    SystemParser,
+    DataStore, OperationStatus, SaveEntry, SaveMetadata, SaveOperation, SavefileManager,
+    SystemConfig, SystemParser,
 };
 
 ////////////////////////////////////////////// Constants ///////////////////////////////////////////////
@@ -415,33 +415,33 @@ impl From<System> for SystemListItem {
 
 /// Creates a new system from configuration.
 async fn create_system(
-    State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
     Json(request): Json<CreateSystemRequest>,
 ) -> Result<Json<CreateSystemResponse>, (StatusCode, &'static str)> {
     // Validate the config first
     if request.config.validate().is_err() {
-        let log_entry = LogEntry::new(
-            LogOperation::SystemCreate {
+        let save_entry = SaveEntry::new(
+            SaveOperation::SystemCreate {
                 system_id: "unknown".to_string(),
                 config: None,
                 success: false,
             },
-            LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+            SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
         );
-        logger.log_or_error(&log_entry);
+        logger.save_or_error(&save_entry);
         return Err((StatusCode::BAD_REQUEST, "Invalid system configuration"));
     }
 
     let system = System::new(request.config).map_err(|_e| {
-        let log_entry = LogEntry::new(
-            LogOperation::SystemCreate {
+        let log_entry = SaveEntry::new(
+            SaveOperation::SystemCreate {
                 system_id: "unknown".to_string(),
                 config: None,
                 success: false,
             },
-            LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+            SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
         );
-        logger.log_or_error(&log_entry);
+        logger.save_or_error(&log_entry);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             "failed to generate system id",
@@ -453,27 +453,27 @@ async fn create_system(
 
     // Store the system in the data store
     if data_store.create_system(&system).is_err() {
-        let log_entry = LogEntry::new(
-            LogOperation::SystemCreate {
+        let log_entry = SaveEntry::new(
+            SaveOperation::SystemCreate {
                 system_id: system_id.clone(),
                 config: Some(config),
                 success: false,
             },
-            LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+            SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
         );
-        logger.log_or_error(&log_entry);
+        logger.save_or_error(&log_entry);
         return Err((StatusCode::CONFLICT, "system with this id already exists"));
     }
 
-    let log_entry = LogEntry::new(
-        LogOperation::SystemCreate {
+    let log_entry = SaveEntry::new(
+        SaveOperation::SystemCreate {
             system_id,
             config: Some(config),
             success: true,
         },
-        LogMetadata::rest_api(None).with_status(OperationStatus::Success),
+        SaveMetadata::rest_api(None).with_status(OperationStatus::Success),
     );
-    logger.log_or_error(&log_entry);
+    logger.save_or_error(&log_entry);
 
     let response = CreateSystemResponse {
         system,
@@ -485,21 +485,21 @@ async fn create_system(
 
 /// Creates a new system from markdown content.
 async fn create_system_from_markdown(
-    State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
     Json(request): Json<CreateSystemFromMarkdownRequest>,
 ) -> Result<Json<CreateSystemResponse>, (StatusCode, String)> {
     let config = match SystemParser::parse(&request.content) {
         Ok(config) => config,
         Err(e) => {
-            let log_entry = LogEntry::new(
-                LogOperation::SystemCreate {
+            let log_entry = SaveEntry::new(
+                SaveOperation::SystemCreate {
                     system_id: "unknown".to_string(),
                     config: None,
                     success: false,
                 },
-                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+                SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&log_entry);
             return Err((
                 StatusCode::BAD_REQUEST,
                 format!("Failed to parse markdown: {}", e),
@@ -516,7 +516,7 @@ async fn create_system_from_markdown(
 
 /// Lists all systems.
 async fn list_systems(
-    State((_logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((_logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
 ) -> Result<Json<Vec<SystemListItem>>, (StatusCode, &'static str)> {
     match data_store.list_systems() {
         Ok(systems) => {
@@ -530,7 +530,7 @@ async fn list_systems(
 
 /// Gets a system by its ID.
 async fn get_system(
-    State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
     Path(system_base64): Path<String>,
 ) -> Result<Json<System>, (StatusCode, &'static str)> {
     // Construct full system string from base64 part
@@ -540,14 +540,14 @@ async fn get_system(
     let system_id = match SystemId::from_str(&system_string) {
         Ok(id) => id,
         Err(_parse_error) => {
-            let log_entry = LogEntry::new(
-                LogOperation::SystemGet {
+            let log_entry = SaveEntry::new(
+                SaveOperation::SystemGet {
                     system_id: system_string,
                     success: false,
                 },
-                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+                SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&log_entry);
             return Err((StatusCode::BAD_REQUEST, "invalid system id"));
         }
     };
@@ -555,36 +555,36 @@ async fn get_system(
     // Look up the system in the data store
     match data_store.get_system(&system_id) {
         Ok(Some(system)) => {
-            let log_entry = LogEntry::new(
-                LogOperation::SystemGet {
+            let log_entry = SaveEntry::new(
+                SaveOperation::SystemGet {
                     system_id: system_string,
                     success: true,
                 },
-                LogMetadata::rest_api(None).with_status(OperationStatus::Success),
+                SaveMetadata::rest_api(None).with_status(OperationStatus::Success),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&log_entry);
             Ok(Json(system))
         }
         Ok(None) => {
-            let log_entry = LogEntry::new(
-                LogOperation::SystemGet {
+            let log_entry = SaveEntry::new(
+                SaveOperation::SystemGet {
                     system_id: system_string,
                     success: false,
                 },
-                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+                SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&log_entry);
             Err((StatusCode::NOT_FOUND, "system not found"))
         }
         Err(_) => {
-            let log_entry = LogEntry::new(
-                LogOperation::SystemGet {
+            let log_entry = SaveEntry::new(
+                SaveOperation::SystemGet {
                     system_id: system_string,
                     success: false,
                 },
-                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+                SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&log_entry);
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "failed to retrieve system",
@@ -595,7 +595,7 @@ async fn get_system(
 
 /// Updates a system.
 async fn update_system(
-    State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
     Path(system_base64): Path<String>,
     Json(config): Json<SystemConfig>,
 ) -> Result<Json<System>, (StatusCode, String)> {
@@ -614,16 +614,16 @@ async fn update_system(
     let system_id = match SystemId::from_str(&system_string) {
         Ok(id) => id,
         Err(_parse_error) => {
-            let log_entry = LogEntry::new(
-                LogOperation::SystemUpdate {
+            let log_entry = SaveEntry::new(
+                SaveOperation::SystemUpdate {
                     system_id: system_string,
                     old_config: None,
                     new_config: config,
                     success: false,
                 },
-                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+                SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&log_entry);
             return Err((StatusCode::BAD_REQUEST, "invalid system id".to_string()));
         }
     };
@@ -632,29 +632,29 @@ async fn update_system(
     let old_system = match data_store.get_system(&system_id) {
         Ok(Some(system)) => system,
         Ok(None) => {
-            let log_entry = LogEntry::new(
-                LogOperation::SystemUpdate {
+            let log_entry = SaveEntry::new(
+                SaveOperation::SystemUpdate {
                     system_id: system_string,
                     old_config: None,
                     new_config: config,
                     success: false,
                 },
-                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+                SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&log_entry);
             return Err((StatusCode::NOT_FOUND, "system not found".to_string()));
         }
         Err(_) => {
-            let log_entry = LogEntry::new(
-                LogOperation::SystemUpdate {
+            let log_entry = SaveEntry::new(
+                SaveOperation::SystemUpdate {
                     system_id: system_string,
                     old_config: None,
                     new_config: config,
                     success: false,
                 },
-                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+                SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&log_entry);
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "failed to retrieve system".to_string(),
@@ -669,42 +669,42 @@ async fn update_system(
     // Update in data store
     match data_store.update_system(&updated_system) {
         Ok(true) => {
-            let log_entry = LogEntry::new(
-                LogOperation::SystemUpdate {
+            let log_entry = SaveEntry::new(
+                SaveOperation::SystemUpdate {
                     system_id: system_string,
                     old_config: Some(old_system.config),
                     new_config: config,
                     success: true,
                 },
-                LogMetadata::rest_api(None).with_status(OperationStatus::Success),
+                SaveMetadata::rest_api(None).with_status(OperationStatus::Success),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&log_entry);
             Ok(Json(updated_system))
         }
         Ok(false) => {
-            let log_entry = LogEntry::new(
-                LogOperation::SystemUpdate {
+            let log_entry = SaveEntry::new(
+                SaveOperation::SystemUpdate {
                     system_id: system_string,
                     old_config: Some(old_system.config),
                     new_config: config,
                     success: false,
                 },
-                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+                SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&log_entry);
             Err((StatusCode::NOT_FOUND, "system not found".to_string()))
         }
         Err(_) => {
-            let log_entry = LogEntry::new(
-                LogOperation::SystemUpdate {
+            let log_entry = SaveEntry::new(
+                SaveOperation::SystemUpdate {
                     system_id: system_string,
                     old_config: Some(old_system.config),
                     new_config: config,
                     success: false,
                 },
-                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+                SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&log_entry);
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "failed to update system".to_string(),
@@ -715,7 +715,7 @@ async fn update_system(
 
 /// Patches a system.
 async fn patch_system(
-    State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
     Path(system_base64): Path<String>,
     Json(patch_data): Json<Value>,
 ) -> Result<Json<System>, (StatusCode, String)> {
@@ -726,15 +726,15 @@ async fn patch_system(
     let system_id = match SystemId::from_str(&system_string) {
         Ok(id) => id,
         Err(_parse_error) => {
-            let log_entry = LogEntry::new(
-                LogOperation::SystemPatch {
+            let log_entry = SaveEntry::new(
+                SaveOperation::SystemPatch {
                     system_id: system_string,
                     patch_data,
                     success: false,
                 },
-                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+                SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&log_entry);
             return Err((StatusCode::BAD_REQUEST, "invalid system id".to_string()));
         }
     };
@@ -743,27 +743,27 @@ async fn patch_system(
     let mut system = match data_store.get_system(&system_id) {
         Ok(Some(system)) => system,
         Ok(None) => {
-            let log_entry = LogEntry::new(
-                LogOperation::SystemPatch {
+            let log_entry = SaveEntry::new(
+                SaveOperation::SystemPatch {
                     system_id: system_string,
                     patch_data,
                     success: false,
                 },
-                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+                SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&log_entry);
             return Err((StatusCode::NOT_FOUND, "system not found".to_string()));
         }
         Err(_) => {
-            let log_entry = LogEntry::new(
-                LogOperation::SystemPatch {
+            let log_entry = SaveEntry::new(
+                SaveOperation::SystemPatch {
                     system_id: system_string,
                     patch_data,
                     success: false,
                 },
-                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+                SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&log_entry);
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "failed to retrieve system".to_string(),
@@ -776,15 +776,15 @@ async fn patch_system(
     let patch_obj = match patch_data.as_object() {
         Some(obj) => obj,
         None => {
-            let log_entry = LogEntry::new(
-                LogOperation::SystemPatch {
+            let log_entry = SaveEntry::new(
+                SaveOperation::SystemPatch {
                     system_id: system_string,
                     patch_data,
                     success: false,
                 },
-                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+                SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&log_entry);
             return Err((
                 StatusCode::BAD_REQUEST,
                 "patch data must be an object".to_string(),
@@ -822,39 +822,39 @@ async fn patch_system(
     // Save to data store
     match data_store.update_system(&system) {
         Ok(true) => {
-            let log_entry = LogEntry::new(
-                LogOperation::SystemPatch {
+            let log_entry = SaveEntry::new(
+                SaveOperation::SystemPatch {
                     system_id: system_string,
                     patch_data,
                     success: true,
                 },
-                LogMetadata::rest_api(None).with_status(OperationStatus::Success),
+                SaveMetadata::rest_api(None).with_status(OperationStatus::Success),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&log_entry);
             Ok(Json(system))
         }
         Ok(false) => {
-            let log_entry = LogEntry::new(
-                LogOperation::SystemPatch {
+            let log_entry = SaveEntry::new(
+                SaveOperation::SystemPatch {
                     system_id: system_string,
                     patch_data,
                     success: false,
                 },
-                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+                SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&log_entry);
             Err((StatusCode::NOT_FOUND, "system not found".to_string()))
         }
         Err(_) => {
-            let log_entry = LogEntry::new(
-                LogOperation::SystemPatch {
+            let log_entry = SaveEntry::new(
+                SaveOperation::SystemPatch {
                     system_id: system_string,
                     patch_data,
                     success: false,
                 },
-                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+                SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&log_entry);
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "failed to update system".to_string(),
@@ -865,7 +865,7 @@ async fn patch_system(
 
 /// Deletes a system.
 async fn delete_system(
-    State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
     Path(system_base64): Path<String>,
 ) -> Result<StatusCode, (StatusCode, &'static str)> {
     // Construct full system string from base64 part
@@ -875,14 +875,14 @@ async fn delete_system(
     let system_id = match SystemId::from_str(&system_string) {
         Ok(id) => id,
         Err(_parse_error) => {
-            let log_entry = LogEntry::new(
-                LogOperation::SystemDelete {
+            let log_entry = SaveEntry::new(
+                SaveOperation::SystemDelete {
                     system_id: system_string,
                     success: false,
                 },
-                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+                SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&log_entry);
             return Err((StatusCode::BAD_REQUEST, "invalid system id"));
         }
     };
@@ -890,36 +890,36 @@ async fn delete_system(
     // Delete from data store
     match data_store.delete_system(&system_id) {
         Ok(true) => {
-            let log_entry = LogEntry::new(
-                LogOperation::SystemDelete {
+            let log_entry = SaveEntry::new(
+                SaveOperation::SystemDelete {
                     system_id: system_string,
                     success: true,
                 },
-                LogMetadata::rest_api(None).with_status(OperationStatus::Success),
+                SaveMetadata::rest_api(None).with_status(OperationStatus::Success),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&log_entry);
             Ok(StatusCode::NO_CONTENT)
         }
         Ok(false) => {
-            let log_entry = LogEntry::new(
-                LogOperation::SystemDelete {
+            let log_entry = SaveEntry::new(
+                SaveOperation::SystemDelete {
                     system_id: system_string,
                     success: false,
                 },
-                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+                SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&log_entry);
             Err((StatusCode::NOT_FOUND, "system not found"))
         }
         Err(_) => {
-            let log_entry = LogEntry::new(
-                LogOperation::SystemDelete {
+            let log_entry = SaveEntry::new(
+                SaveOperation::SystemDelete {
                     system_id: system_string,
                     success: false,
                 },
-                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+                SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&log_entry);
             Err((StatusCode::INTERNAL_SERVER_ERROR, "failed to delete system"))
         }
     }
@@ -927,25 +927,25 @@ async fn delete_system(
 
 /// Deletes all systems.
 async fn delete_all_systems(
-    State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
 ) -> Result<StatusCode, (StatusCode, &'static str)> {
     match data_store.delete_all_systems() {
         Ok(count) => {
-            let log_entry = LogEntry::new(
-                LogOperation::SystemDeleteAll {
+            let log_entry = SaveEntry::new(
+                SaveOperation::SystemDeleteAll {
                     count_deleted: count,
                 },
-                LogMetadata::rest_api(None).with_status(OperationStatus::Success),
+                SaveMetadata::rest_api(None).with_status(OperationStatus::Success),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&log_entry);
             Ok(StatusCode::NO_CONTENT)
         }
         Err(_) => {
-            let log_entry = LogEntry::new(
-                LogOperation::SystemDeleteAll { count_deleted: 0 },
-                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+            let log_entry = SaveEntry::new(
+                SaveOperation::SystemDeleteAll { count_deleted: 0 },
+                SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&log_entry);
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "failed to delete all systems",
@@ -957,7 +957,10 @@ async fn delete_all_systems(
 ////////////////////////////////////////////// Router //////////////////////////////////////////////////
 
 /// Creates an Axum router with system management endpoints.
-pub fn create_system_router(logger: Arc<DurableLogger>, data_store: Arc<dyn DataStore>) -> Router {
+pub fn create_system_router(
+    logger: Arc<SavefileManager>,
+    data_store: Arc<dyn DataStore>,
+) -> Router {
     Router::new()
         .route(
             "/system",
@@ -979,18 +982,18 @@ pub fn create_system_router(logger: Arc<DurableLogger>, data_store: Arc<dyn Data
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::test_helpers::{clear_log_file, test_data_store};
+    use crate::test_utils::test_helpers::{clear_savefile, test_data_store};
     use std::path::PathBuf;
     use std::process;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn test_logger() -> (Arc<DurableLogger>, PathBuf) {
+    fn test_logger() -> (Arc<SavefileManager>, PathBuf) {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_millis();
         let test_path = PathBuf::from(format!("test_system_{}_{}.jsonl", process::id(), timestamp));
-        let logger = Arc::new(DurableLogger::new(test_path.clone()));
+        let logger = Arc::new(SavefileManager::new(test_path.clone()));
         (logger, test_path)
     }
 
@@ -1113,7 +1116,7 @@ mod tests {
             assert_eq!(response.0.system.config, config);
             assert!(response.0.created);
         }
-        clear_log_file(&log_path);
+        clear_savefile(&log_path);
     }
 
     #[tokio::test]
@@ -1154,7 +1157,7 @@ You are a test system created from markdown."#;
             );
             assert!(response.0.created);
         }
-        clear_log_file(&log_path);
+        clear_savefile(&log_path);
     }
 
     #[tokio::test]
@@ -1174,6 +1177,6 @@ You are a test system created from markdown."#;
         if let Err((status, _)) = response {
             assert_eq!(status, StatusCode::BAD_REQUEST);
         }
-        clear_log_file(&log_path);
+        clear_savefile(&log_path);
     }
 }

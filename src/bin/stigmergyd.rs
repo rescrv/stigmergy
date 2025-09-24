@@ -8,14 +8,14 @@ use tokio::net::TcpListener;
 use tokio::signal;
 
 use stigmergy::{
-    DurableLogger, InMemoryDataStore, create_component_router, create_entity_router,
+    InMemoryDataStore, SavefileManager, create_component_router, create_entity_router,
     create_system_router,
 };
 
 #[derive(CommandLine, Default, PartialEq, Eq)]
 struct Args {
-    #[arrrg(optional, "Path to log file for durable logging")]
-    log_file: Option<String>,
+    #[arrrg(optional, "Path to savefile for persistent state storage")]
+    savefile: Option<String>,
     #[arrrg(optional, "Host to bind the HTTP server")]
     host: Option<String>,
     #[arrrg(optional, "Port to bind the HTTP server")]
@@ -30,7 +30,7 @@ USAGE:
     stigmergyd [OPTIONS]
 
 OPTIONS:
-    --log-file <PATH>    Path to log file for durable logging [default: stigmergy.jsonl]
+    --savefile <PATH>    Path to savefile for persistent state storage [default: stigmergy.jsonl]
     --host <HOST>        Host to bind the HTTP server [default: 127.0.0.1]
     --port <PORT>        Port to bind the HTTP server [default: 8080]
     --verbose            Enable verbose logging
@@ -87,16 +87,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if config.verbose {
         println!("Stigmergy daemon starting with configuration:");
-        println!("  Log file: {}", config.log_file.display());
+        println!("  Savefile: {}", config.savefile_path.display());
         println!("  Bind address: {}:{}", config.host, config.port);
     }
 
-    // Initialize logging and data storage
-    let logger = Arc::new(DurableLogger::new(config.log_file.clone()));
+    // Initialize savefile manager and data storage
+    let logger = Arc::new(SavefileManager::new(config.savefile_path.clone()));
     let data_store = Arc::new(InMemoryDataStore::new());
 
     if config.verbose {
-        println!("Initialized logger and data store");
+        println!("Initialized savefile manager and data store");
     }
 
     // Create routers
@@ -117,7 +117,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("🚀 Stigmergy daemon started successfully!");
     println!("📡 Server listening on: http://{}", addr);
-    println!("📝 Logging to: {}", config.log_file.display());
+    println!("💾 Savefile: {}", config.savefile_path.display());
     println!("🔄 Ready to accept API requests");
 
     if config.verbose {
@@ -151,7 +151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // TODO(claude): cleanup this output
             if config.verbose {
                 println!("📊 Final statistics:");
-                println!("   Log file: {}", config.log_file.display());
+                println!("   Savefile: {}", config.savefile_path.display());
                 println!("   Shutdown completed successfully");
             }
 
@@ -163,7 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 struct ServerConfig {
-    log_file: PathBuf,
+    savefile_path: PathBuf,
     host: String,
     port: u16,
     verbose: bool,
@@ -172,8 +172,8 @@ struct ServerConfig {
 impl ServerConfig {
     fn from_args(args: Args) -> Self {
         Self {
-            log_file: args
-                .log_file
+            savefile_path: args
+                .savefile
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("stigmergy.jsonl")),
             host: args.host.unwrap_or_else(|| "127.0.0.1".to_string()),

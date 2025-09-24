@@ -24,8 +24,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::{
-    DataStore, DataStoreOperations, DurableLogger, LogEntry, LogMetadata, LogOperation,
-    OperationStatus,
+    DataStore, DataStoreOperations, OperationStatus, SaveEntry, SaveMetadata, SaveOperation,
+    SavefileManager,
 };
 
 /////////////////////////////////////////////// Entity ////////////////////////////////////////////////
@@ -448,21 +448,21 @@ pub struct CreateEntityResponse {
 /// # Errors
 /// Returns `StatusCode::INTERNAL_SERVER_ERROR` if random number generation fails.
 async fn create_entity(
-    State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
     Json(request): Json<CreateEntityRequest>,
 ) -> Result<Json<CreateEntityResponse>, (StatusCode, &'static str)> {
     let was_random = request.entity.is_none();
     let entity = match request.entity {
         Some(entity) => entity,
         None => Entity::random_url_safe().map_err(|_e| {
-            let log_entry = LogEntry::new(
-                LogOperation::EntityCreate {
+            let save_entry = SaveEntry::new(
+                SaveOperation::EntityCreate {
                     entity: Entity::new([0u8; 32]),
                     was_random,
                 },
-                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+                SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&save_entry);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "failed to generate random entity",
@@ -473,15 +473,15 @@ async fn create_entity(
     // Store the entity in the data store using the standardized operation
     let result = DataStoreOperations::create_entity(&*data_store, &entity);
 
-    let log_entry = LogEntry::new(
-        LogOperation::EntityCreate { entity, was_random },
-        LogMetadata::rest_api(None).with_status(if result.success {
+    let save_entry = SaveEntry::new(
+        SaveOperation::EntityCreate { entity, was_random },
+        SaveMetadata::rest_api(None).with_status(if result.success {
             OperationStatus::Success
         } else {
             OperationStatus::Failed
         }),
     );
-    logger.log_or_error(&log_entry);
+    logger.save_or_error(&save_entry);
 
     if !result.success {
         return Err(match result.into_error() {
@@ -511,7 +511,7 @@ async fn create_entity(
 /// Currently this is a mock implementation that only validates the entity format
 /// but doesn't perform actual deletion from a data store.
 async fn delete_entity(
-    State((logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
     Path(entity_base64): Path<String>,
 ) -> Result<StatusCode, (StatusCode, &'static str)> {
     // Construct full entity string from base64 part
@@ -524,18 +524,18 @@ async fn delete_entity(
             let result = DataStoreOperations::delete_entity(&*data_store, &entity_string);
             let success = result.success && result.data.unwrap_or(false);
 
-            let log_entry = LogEntry::new(
-                LogOperation::EntityDelete {
+            let save_entry = SaveEntry::new(
+                SaveOperation::EntityDelete {
                     entity_id: entity_string,
                     success,
                 },
-                LogMetadata::rest_api(None).with_status(if success {
+                SaveMetadata::rest_api(None).with_status(if success {
                     OperationStatus::Success
                 } else {
                     OperationStatus::Failed
                 }),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&save_entry);
 
             if success {
                 Ok(StatusCode::NO_CONTENT)
@@ -545,14 +545,14 @@ async fn delete_entity(
         }
         Err(_parse_error) => {
             // Invalid entity ID format - log the specific error for debugging
-            let log_entry = LogEntry::new(
-                LogOperation::EntityDelete {
+            let save_entry = SaveEntry::new(
+                SaveOperation::EntityDelete {
                     entity_id: entity_string,
                     success: false,
                 },
-                LogMetadata::rest_api(None).with_status(OperationStatus::Failed),
+                SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
             );
-            logger.log_or_error(&log_entry);
+            logger.save_or_error(&save_entry);
             Err((StatusCode::BAD_REQUEST, "invalid entity id"))
         }
     }
@@ -567,7 +567,7 @@ async fn delete_entity(
 /// * `Ok(Json<Vec<Entity>>)` - List of all entities on success
 /// * `Err(StatusCode::INTERNAL_SERVER_ERROR)` - If data store operation fails
 async fn list_entities(
-    State((_logger, data_store)): State<(Arc<DurableLogger>, Arc<dyn DataStore>)>,
+    State((_logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
 ) -> Result<Json<Vec<Entity>>, (StatusCode, &'static str)> {
     let entities = match data_store.list_entities() {
         Ok(entities) => entities,
@@ -597,14 +597,17 @@ async fn list_entities(
 ///
 /// # Examples
 /// ```
-/// # use stigmergy::{create_entity_router, DurableLogger, InMemoryDataStore};
+/// # use stigmergy::{create_entity_router, SavefileManager, InMemoryDataStore};
 /// # use std::sync::Arc;
 /// # use std::path::PathBuf;
-/// let logger = Arc::new(DurableLogger::new(PathBuf::from("test.jsonl")));
+/// let logger = Arc::new(SavefileManager::new(PathBuf::from("test.jsonl")));
 /// let data_store = Arc::new(InMemoryDataStore::new());
 /// let router = create_entity_router(logger, data_store);
 /// ```
-pub fn create_entity_router(logger: Arc<DurableLogger>, data_store: Arc<dyn DataStore>) -> Router {
+pub fn create_entity_router(
+    logger: Arc<SavefileManager>,
+    data_store: Arc<dyn DataStore>,
+) -> Router {
     Router::new()
         .route("/entity", get(list_entities).post(create_entity))
         .route("/entity/:entity_id", delete(delete_entity))
@@ -615,12 +618,12 @@ pub fn create_entity_router(logger: Arc<DurableLogger>, data_store: Arc<dyn Data
 mod tests {
     use super::*;
     use crate::test_utils::test_helpers::{
-        clear_log_file, create_test_logger_with_path, read_log_entries, test_data_store,
+        clear_savefile, create_test_savefile_manager_with_path, load_entries, test_data_store,
     };
     use axum::extract::State;
     use std::path::PathBuf;
 
-    fn test_logger() -> (Arc<DurableLogger>, PathBuf) {
+    fn test_savefile_manager() -> (Arc<SavefileManager>, PathBuf) {
         use std::process;
         use std::time::{SystemTime, UNIX_EPOCH};
         let timestamp = SystemTime::now()
@@ -628,7 +631,7 @@ mod tests {
             .unwrap()
             .as_millis();
         let test_path = PathBuf::from(format!("test_entity_{}_{}.jsonl", process::id(), timestamp));
-        let logger = Arc::new(DurableLogger::new(test_path.clone()));
+        let logger = Arc::new(SavefileManager::new(test_path.clone()));
         (logger, test_path)
     }
 
@@ -791,7 +794,7 @@ mod tests {
             entity: Some(test_entity),
         };
 
-        let (logger, log_path) = test_logger();
+        let (logger, log_path) = test_savefile_manager();
         let data_store = test_data_store();
         let response = create_entity(State((logger, data_store)), Json(request))
             .await
@@ -799,14 +802,14 @@ mod tests {
 
         assert_eq!(response.0.entity, test_entity);
         assert!(response.0.created);
-        clear_log_file(&log_path);
+        clear_savefile(&log_path);
     }
 
     #[tokio::test]
     async fn create_entity_generates_random_when_none() {
         let request = CreateEntityRequest { entity: None };
 
-        let (logger, log_path) = test_logger();
+        let (logger, log_path) = test_savefile_manager();
         let data_store = test_data_store();
         let response = create_entity(State((logger, data_store)), Json(request)).await;
 
@@ -816,13 +819,13 @@ mod tests {
         assert!(response.0.created);
         // The entity should be randomly generated (not all zeros)
         assert_ne!(response.0.entity, Entity::new([0u8; 32]));
-        clear_log_file(&log_path);
+        clear_savefile(&log_path);
     }
 
     #[tokio::test]
     async fn create_entity_avoids_special_characters() {
         // Generate multiple random entities and verify none contain - or _
-        let (logger, log_path) = test_logger();
+        let (logger, log_path) = test_savefile_manager();
         let data_store = test_data_store();
 
         for _ in 0..1000 {
@@ -860,7 +863,7 @@ mod tests {
                 );
             }
         }
-        clear_log_file(&log_path);
+        clear_savefile(&log_path);
     }
 
     #[tokio::test]
@@ -870,7 +873,7 @@ mod tests {
         // Extract just the base64 part after "entity:"
         let base64_part = entity_str.strip_prefix(ENTITY_PREFIX).unwrap();
 
-        let (logger, log_path) = test_logger();
+        let (logger, log_path) = test_savefile_manager();
         let data_store = test_data_store();
 
         // First create the entity in the data store
@@ -880,14 +883,14 @@ mod tests {
             delete_entity(State((logger, data_store)), Path(base64_part.to_string())).await;
 
         assert_eq!(result, Ok(StatusCode::NO_CONTENT));
-        clear_log_file(&log_path);
+        clear_savefile(&log_path);
     }
 
     #[tokio::test]
     async fn delete_entity_invalid_id() {
         let invalid_base64 = "invalid_entity_id".to_string();
 
-        let (logger, log_path) = test_logger();
+        let (logger, log_path) = test_savefile_manager();
         let data_store = test_data_store();
         let result = delete_entity(
             State((logger, data_store)),
@@ -896,13 +899,13 @@ mod tests {
         .await;
 
         assert_eq!(result, Err((StatusCode::BAD_REQUEST, "invalid entity id")));
-        clear_log_file(&log_path);
+        clear_savefile(&log_path);
     }
 
     #[tokio::test]
     async fn create_entity_success_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("entity", "create_success");
-        clear_log_file(&log_path);
+        let (logger, log_path) = create_test_savefile_manager_with_path("entity", "create_success");
+        clear_savefile(&log_path);
 
         let test_entity = Entity::new([42u8; 32]);
         let request = CreateEntityRequest {
@@ -910,7 +913,7 @@ mod tests {
         };
 
         // Check log file before operation (should be empty)
-        let logs_before = read_log_entries(&log_path);
+        let logs_before = load_entries(&log_path);
         assert!(
             logs_before.is_empty(),
             "Log file should be empty before operation"
@@ -925,42 +928,42 @@ mod tests {
         assert!(response.0.created);
 
         // Check log file after operation
-        let logs_after = read_log_entries(&log_path);
+        let logs_after = load_entries(&log_path);
         assert_eq!(logs_after.len(), 1, "Should have exactly one log entry");
 
-        let log_entry = &logs_after[0];
-        assert_eq!(log_entry.operation_type(), "EntityCreate");
-        assert!(log_entry.is_success());
-        assert_eq!(log_entry.entity_id(), Some(test_entity.to_string()));
+        let save_entry = &logs_after[0];
+        assert_eq!(save_entry.operation_type(), "EntityCreate");
+        assert!(save_entry.is_success());
+        assert_eq!(save_entry.entity_id(), Some(test_entity.to_string()));
 
         // Validate JSON structure and content
-        match &log_entry.operation {
-            LogOperation::EntityCreate { entity, was_random } => {
+        match &save_entry.operation {
+            SaveOperation::EntityCreate { entity, was_random } => {
                 assert_eq!(*entity, test_entity);
                 assert!(!was_random, "Should not be random when entity is provided");
             }
             _ => panic!("Expected EntityCreate operation"),
         }
 
-        assert_eq!(log_entry.metadata.source, "REST API");
+        assert_eq!(save_entry.metadata.source, "REST API");
         assert!(matches!(
-            log_entry.metadata.status,
+            save_entry.metadata.status,
             OperationStatus::Success
         ));
 
         // Cleanup
-        clear_log_file(&log_path);
+        clear_savefile(&log_path);
     }
 
     #[tokio::test]
     async fn create_entity_random_success_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("entity", "create_random");
-        clear_log_file(&log_path);
+        let (logger, log_path) = create_test_savefile_manager_with_path("entity", "create_random");
+        clear_savefile(&log_path);
 
         let request = CreateEntityRequest { entity: None };
 
         // Check log file before operation
-        let logs_before = read_log_entries(&log_path);
+        let logs_before = load_entries(&log_path);
         assert!(logs_before.is_empty());
 
         // Execute HTTP operation
@@ -970,7 +973,7 @@ mod tests {
         // This test requires /dev/urandom to be available
         if response.is_err() {
             println!("Skipping random entity test - /dev/urandom not available");
-            clear_log_file(&log_path);
+            clear_savefile(&log_path);
             return;
         }
 
@@ -978,16 +981,16 @@ mod tests {
         assert!(response.0.created);
 
         // Check log file after operation
-        let logs_after = read_log_entries(&log_path);
+        let logs_after = load_entries(&log_path);
         assert_eq!(logs_after.len(), 1, "Should have exactly one log entry");
 
-        let log_entry = &logs_after[0];
-        assert_eq!(log_entry.operation_type(), "EntityCreate");
-        assert!(log_entry.is_success());
+        let save_entry = &logs_after[0];
+        assert_eq!(save_entry.operation_type(), "EntityCreate");
+        assert!(save_entry.is_success());
 
         // Validate JSON structure and content
-        match &log_entry.operation {
-            LogOperation::EntityCreate {
+        match &save_entry.operation {
+            SaveOperation::EntityCreate {
                 entity: _,
                 was_random,
             } => {
@@ -1000,20 +1003,20 @@ mod tests {
         }
 
         // Cleanup
-        clear_log_file(&log_path);
+        clear_savefile(&log_path);
     }
 
     #[tokio::test]
     async fn delete_entity_success_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("entity", "delete_success");
-        clear_log_file(&log_path);
+        let (logger, log_path) = create_test_savefile_manager_with_path("entity", "delete_success");
+        clear_savefile(&log_path);
 
         let entity = Entity::new([1u8; 32]);
         let entity_str = entity.to_string();
         let base64_part = entity_str.strip_prefix(ENTITY_PREFIX).unwrap();
 
         // Check log file before operation
-        let logs_before = read_log_entries(&log_path);
+        let logs_before = load_entries(&log_path);
         assert!(logs_before.is_empty());
 
         // Execute HTTP operation
@@ -1027,42 +1030,42 @@ mod tests {
         assert_eq!(result, Ok(StatusCode::NO_CONTENT));
 
         // Check log file after operation
-        let logs_after = read_log_entries(&log_path);
+        let logs_after = load_entries(&log_path);
         assert_eq!(logs_after.len(), 1, "Should have exactly one log entry");
 
-        let log_entry = &logs_after[0];
-        assert_eq!(log_entry.operation_type(), "EntityDelete");
-        assert!(log_entry.is_success());
-        assert_eq!(log_entry.entity_id(), Some(entity_str.clone()));
+        let save_entry = &logs_after[0];
+        assert_eq!(save_entry.operation_type(), "EntityDelete");
+        assert!(save_entry.is_success());
+        assert_eq!(save_entry.entity_id(), Some(entity_str.clone()));
 
         // Validate JSON structure and content
-        match &log_entry.operation {
-            LogOperation::EntityDelete { entity_id, success } => {
+        match &save_entry.operation {
+            SaveOperation::EntityDelete { entity_id, success } => {
                 assert_eq!(*entity_id, entity_str);
                 assert!(*success, "Delete should be successful");
             }
             _ => panic!("Expected EntityDelete operation"),
         }
 
-        assert_eq!(log_entry.metadata.source, "REST API");
+        assert_eq!(save_entry.metadata.source, "REST API");
         assert!(matches!(
-            log_entry.metadata.status,
+            save_entry.metadata.status,
             OperationStatus::Success
         ));
 
         // Cleanup
-        clear_log_file(&log_path);
+        clear_savefile(&log_path);
     }
 
     #[tokio::test]
     async fn delete_entity_failure_logs_correctly() {
-        let (logger, log_path) = create_test_logger_with_path("entity", "delete_failure");
-        clear_log_file(&log_path);
+        let (logger, log_path) = create_test_savefile_manager_with_path("entity", "delete_failure");
+        clear_savefile(&log_path);
 
         let invalid_base64 = "invalid_entity_id";
 
         // Check log file before operation
-        let logs_before = read_log_entries(&log_path);
+        let logs_before = load_entries(&log_path);
         assert!(logs_before.is_empty());
 
         // Execute HTTP operation
@@ -1075,26 +1078,29 @@ mod tests {
         assert_eq!(result, Err((StatusCode::BAD_REQUEST, "invalid entity id")));
 
         // Check log file after operation
-        let logs_after = read_log_entries(&log_path);
+        let logs_after = load_entries(&log_path);
         assert_eq!(logs_after.len(), 1, "Should have exactly one log entry");
 
-        let log_entry = &logs_after[0];
-        assert_eq!(log_entry.operation_type(), "EntityDelete");
-        assert!(log_entry.is_failure());
+        let save_entry = &logs_after[0];
+        assert_eq!(save_entry.operation_type(), "EntityDelete");
+        assert!(save_entry.is_failure());
 
         // Validate JSON structure and content
-        match &log_entry.operation {
-            LogOperation::EntityDelete { entity_id, success } => {
+        match &save_entry.operation {
+            SaveOperation::EntityDelete { entity_id, success } => {
                 assert_eq!(*entity_id, format!("{}{}", ENTITY_PREFIX, invalid_base64));
                 assert!(!success, "Delete should be unsuccessful for invalid entity");
             }
             _ => panic!("Expected EntityDelete operation"),
         }
 
-        assert_eq!(log_entry.metadata.source, "REST API");
-        assert!(matches!(log_entry.metadata.status, OperationStatus::Failed));
+        assert_eq!(save_entry.metadata.source, "REST API");
+        assert!(matches!(
+            save_entry.metadata.status,
+            OperationStatus::Failed
+        ));
 
         // Cleanup
-        clear_log_file(&log_path);
+        clear_savefile(&log_path);
     }
 }
