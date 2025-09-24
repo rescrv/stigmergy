@@ -1,3 +1,45 @@
+//! # Persistent Operation Logging
+//!
+//! This module provides comprehensive logging and replay capabilities for all operations
+//! in the stigmergy system. Every state transition is recorded to JSONL files with
+//! timestamps, operation details, and metadata for debugging, auditing, and system replay.
+//!
+//! ## Key Features
+//!
+//! - **Complete Operation Logging**: Records all entity, component definition, and component instance operations
+//! - **JSONL Format**: Each operation is stored as a single line of JSON for easy parsing
+//! - **Metadata Tracking**: Includes timestamps, operation context, and success/failure status
+//! - **Replay Support**: Ability to replay operations for state reconstruction
+//! - **Validation Tracking**: Records schema validation results and performance metrics
+//!
+//! ## File Format
+//!
+//! Each log entry is stored as a single line of JSON with the following structure:
+//! ```json
+//! {
+//!   "id": "unique-entry-id",
+//!   "timestamp": "2024-01-01T12:00:00Z",
+//!   "operation": { /* operation-specific data */ },
+//!   "metadata": { /* context and status information */ }
+//! }
+//! ```
+//!
+//! ## Usage Examples
+//!
+//! ```rust
+//! use stigmergy::{SavefileManager, SaveEntry, SaveOperation, SaveMetadata, Entity};
+//! use std::path::PathBuf;
+//!
+//! // Create a savefile manager
+//! let manager = SavefileManager::new(PathBuf::from("operations.jsonl"));
+//!
+//! // Create and log an operation
+//! let entity = Entity::new([1u8; 32]);
+//! let operation = SaveOperation::EntityCreate { entity, was_random: false };
+//! let entry = SaveEntry::new(operation, SaveMetadata::system());
+//! manager.save_or_error(&entry);
+//! ```
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -7,11 +49,11 @@ use std::path::PathBuf;
 
 use crate::{ComponentDefinition, DataStore, DataStoreOperations, Entity, data_operations};
 
-/// Comprehensive savefile system for all state transitions in the stigmergy system.
+/// A complete record of a single operation in the stigmergy system.
 ///
-/// Each variant represents a different type of operation that can occur, providing
-/// structured recording with timestamps, operation details, and metadata for state
-/// persistence, debugging, and system monitoring purposes.
+/// Each save entry represents one operation that occurred, including its unique identifier,
+/// timestamp, the specific operation details, and contextual metadata. This enables
+/// comprehensive auditing, debugging, and replay capabilities.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SaveEntry {
     /// Unique identifier for this save entry
@@ -27,120 +69,205 @@ pub struct SaveEntry {
     pub metadata: SaveMetadata,
 }
 
-/// All possible operations that can be saved in the system
+/// All possible operations that can be logged in the stigmergy system.
+///
+/// This enum represents every type of operation that can occur, from entity management
+/// to component definitions and component instances. Each variant contains the specific
+/// data needed to understand and potentially replay the operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SaveOperation {
     // Entity operations
+    /// An entity was created in the system.
     EntityCreate {
+        /// The entity that was created
         entity: Entity,
+        /// Whether the entity ID was randomly generated
         was_random: bool,
     },
+
+    /// An entity was deleted from the system.
     EntityDelete {
+        /// The ID string of the entity that was deleted
         entity_id: String,
+        /// Whether the deletion was successful
         success: bool,
     },
 
     // Component Definition operations
+    /// A component definition was created.
     ComponentDefinitionCreate {
+        /// The component definition that was created
         definition: ComponentDefinition,
+        /// The result of validating the definition's schema
         validation_result: ValidationResult,
     },
+    /// A component definition was updated.
     ComponentDefinitionUpdate {
+        /// The ID of the component definition being updated
         definition_id: String,
+        /// The previous definition (if it existed)
         old_definition: Option<ComponentDefinition>,
+        /// The new definition after update
         new_definition: ComponentDefinition,
+        /// The result of validating the new definition's schema
         validation_result: ValidationResult,
     },
+    /// A component definition was modified via patch operation.
     ComponentDefinitionPatch {
+        /// The ID of the component definition being patched
         definition_id: String,
+        /// The patch data applied to the definition
         patch_data: Value,
+        /// The resulting definition after applying the patch
         result_definition: ComponentDefinition,
     },
+    /// A component definition was deleted.
     ComponentDefinitionDelete {
+        /// The ID of the component definition that was deleted
         definition_id: String,
+        /// The definition that was deleted (if it existed)
         deleted_definition: Option<ComponentDefinition>,
     },
+    /// All component definitions were deleted.
     ComponentDefinitionDeleteAll {
+        /// The number of definitions that were deleted
         count_deleted: u32,
     },
+    /// A component definition was retrieved (read operation).
     ComponentDefinitionGet {
+        /// The ID of the definition that was requested (None for list operations)
         definition_id: Option<String>,
+        /// Whether the definition was found
         found: bool,
     },
 
     // Component Instance operations
+    /// A component instance was created and attached to an entity.
     ComponentCreate {
+        /// The ID of the entity the component was attached to
         entity_id: String,
+        /// The type identifier of the component
         component_id: String,
+        /// The component data that was stored
         component_data: Value,
+        /// The result of validating the component data (if validation was performed)
         validation_result: Option<ValidationResult>,
     },
+    /// A component instance was updated.
     ComponentUpdate {
+        /// The ID of the entity owning the component
         entity_id: String,
+        /// The type identifier of the component
         component_id: String,
+        /// The previous component data (if it existed)
         old_data: Option<Value>,
+        /// The new component data after update
         new_data: Value,
+        /// The result of validating the new data (if validation was performed)
         validation_result: Option<ValidationResult>,
     },
+    /// A component instance was modified via patch operation.
     ComponentPatch {
+        /// The ID of the entity owning the component
         entity_id: String,
+        /// The type identifier of the component
         component_id: String,
+        /// The patch data applied to the component
         patch_data: Value,
+        /// The resulting component data after applying the patch
         result_data: Value,
     },
+    /// A component instance was deleted from an entity.
     ComponentDelete {
+        /// The ID of the entity the component was removed from
         entity_id: String,
+        /// The type identifier of the component
         component_id: String,
+        /// The component data that was deleted (if it existed)
         deleted_data: Option<Value>,
     },
+    /// All component instances were deleted.
     ComponentDeleteAll {
+        /// The number of component instances that were deleted
         count_deleted: u32,
     },
+    /// A component instance was retrieved (read operation).
     ComponentGet {
+        /// The type identifier of the component that was requested (None for list operations)
         component_id: Option<String>,
+        /// Whether the component was found
         found: bool,
     },
 
     // System operations
+    /// A system was created.
     SystemCreate {
+        /// The ID of the system that was created
         system_id: String,
+        /// The system configuration (if creation was successful)
         config: Option<crate::SystemConfig>,
+        /// Whether the creation was successful
         success: bool,
     },
+    /// A system was updated.
     SystemUpdate {
+        /// The ID of the system that was updated
         system_id: String,
+        /// The previous system configuration (if it existed)
         old_config: Option<crate::SystemConfig>,
+        /// The new system configuration
         new_config: crate::SystemConfig,
+        /// Whether the update was successful
         success: bool,
     },
+    /// A system was modified via patch operation.
     SystemPatch {
+        /// The ID of the system that was patched
         system_id: String,
+        /// The patch data applied to the system
         patch_data: Value,
+        /// Whether the patch was successful
         success: bool,
     },
+    /// A system was deleted.
     SystemDelete {
+        /// The ID of the system that was deleted
         system_id: String,
+        /// Whether the deletion was successful
         success: bool,
     },
+    /// All systems were deleted.
     SystemDeleteAll {
+        /// The number of systems that were deleted
         count_deleted: u32,
     },
+    /// A system was retrieved (read operation).
     SystemGet {
+        /// The ID of the system that was requested
         system_id: String,
+        /// Whether the system was found and retrieved successfully
         success: bool,
     },
 
     // Validation operations
+    /// A validation operation was performed.
     ValidationPerformed {
+        /// The type of validation that was performed
         target_type: ValidationType,
+        /// The ID of the target that was validated
         target_id: String,
+        /// The result of the validation operation
         result: ValidationResult,
     },
 
     // Schema operations
+    /// A schema generation operation was performed.
     SchemaGeneration {
+        /// The type of schema that was generated
         schema_type: String,
+        /// The generated schema
         result_schema: Value,
+        /// Whether the generation was successful
         success: bool,
     },
 }
@@ -148,9 +275,13 @@ pub enum SaveOperation {
 /// Result of a validation operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ValidationResult {
+    /// The validation was successful
     Success,
+    /// The validation failed with error details
     Failed {
+        /// The primary error message
         error: String,
+        /// Additional details about the error (optional)
         details: Option<String>,
     },
 }
@@ -158,9 +289,13 @@ pub enum ValidationResult {
 /// Types of validation that can be performed
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ValidationType {
+    /// Validation of a component definition's JSON schema
     ComponentDefinitionSchema,
+    /// Validation of component instance data against a schema
     ComponentInstanceData,
+    /// Validation of an enumeration schema
     EnumSchema,
+    /// General JSON schema validation
     GeneralSchema,
 }
 
@@ -189,9 +324,13 @@ pub struct SaveMetadata {
 /// Status of an operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum OperationStatus {
+    /// The operation completed successfully
     Success,
+    /// The operation failed
     Failed,
+    /// The operation partially completed
     Partial,
+    /// The operation was cancelled
     Cancelled,
 }
 
@@ -347,6 +486,18 @@ impl SaveMetadata {
         }
     }
 
+    /// Creates metadata for system operations
+    pub fn system() -> Self {
+        Self {
+            source: "System".to_string(),
+            initiator: None,
+            request_id: None,
+            context: None,
+            duration_ms: None,
+            status: OperationStatus::Success,
+        }
+    }
+
     /// Sets the operation status
     pub fn with_status(mut self, status: OperationStatus) -> Self {
         self.status = status;
@@ -428,6 +579,19 @@ macro_rules! save_entity_create {
 }
 
 #[macro_export]
+/// Create a SaveEntry for an entity deletion operation.
+///
+/// # Arguments
+///
+/// * `entity_id` - The entity ID that was deleted
+/// * `success` - Whether the deletion was successful
+///
+/// # Examples
+///
+/// ```rust
+/// # use stigmergy::save_entity_delete;
+/// let log_entry = save_entity_delete!("entity:ABC123", true);
+/// ```
 macro_rules! save_entity_delete {
     ($entity_id:expr, $success:expr) => {
         $crate::SaveEntry::new(
@@ -441,6 +605,27 @@ macro_rules! save_entity_delete {
 }
 
 #[macro_export]
+/// Create a SaveEntry for a component creation operation.
+///
+/// # Arguments
+///
+/// * `entity_id` - The entity ID the component was attached to
+/// * `component_id` - The component type identifier
+/// * `data` - The component data that was stored
+/// * `validation` - Optional validation result
+///
+/// # Examples
+///
+/// ```rust
+/// # use stigmergy::{save_component_create, ValidationResult};
+/// # use serde_json::json;
+/// let log_entry = save_component_create!(
+///     "entity:ABC123",
+///     "Position",
+///     json!({"x": 1.0, "y": 2.0}),
+///     Some(ValidationResult::success())
+/// );
+/// ```
 macro_rules! save_component_create {
     ($entity_id:expr, $component_id:expr, $data:expr, $validation:expr) => {
         $crate::SaveEntry::new(
@@ -748,13 +933,18 @@ impl SavefileManager {
 /// Result of restoring a savefile against a data store
 #[derive(Debug, Clone)]
 pub struct RestoreResult {
+    /// The number of operations successfully restored
     pub successful: u32,
+    /// The number of operations that failed during restoration
     pub failed: u32,
+    /// The number of operations that were skipped (e.g., failed original operations)
     pub skipped: u32,
+    /// Error messages from failed restoration operations
     pub errors: Vec<String>,
 }
 
 impl RestoreResult {
+    /// Create a new RestoreResult with zero counts and empty error list.
     pub fn new() -> Self {
         Self {
             successful: 0,
@@ -764,6 +954,9 @@ impl RestoreResult {
         }
     }
 
+    /// Calculate the total number of operations that were processed (successful + failed).
+    ///
+    /// Skipped operations are not included in this count as they were not actually processed.
     pub fn total_processed(&self) -> u32 {
         self.successful + self.failed
     }

@@ -208,9 +208,13 @@ impl Display for SystemId {
 /// Errors that can occur when parsing a SystemId from a string.
 #[derive(Debug, PartialEq, Eq)]
 pub enum SystemIdParseError {
+    /// The string does not start with 'system:'
     InvalidPrefix,
+    /// The format is invalid (wrong length or structure)
     InvalidFormat,
+    /// The base64 encoding is invalid
     InvalidBase64,
+    /// The decoded bytes are not exactly 32 bytes
     InvalidLength,
 }
 
@@ -326,9 +330,13 @@ impl<'de> serde::de::Visitor<'de> for SystemIdVisitor {
 /// A system represents a Claude Code agent configuration with its associated metadata.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct System {
+    /// Unique identifier for the system
     pub id: SystemId,
+    /// The system configuration containing behavior and metadata
     pub config: SystemConfig,
+    /// When the system was created
     pub created_at: DateTime<Utc>,
+    /// When the system was last updated
     pub updated_at: DateTime<Utc>,
 }
 
@@ -390,12 +398,19 @@ pub struct CreateSystemResponse {
 /// List item for systems (simplified view).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SystemListItem {
+    /// Unique identifier for the system
     pub id: SystemId,
+    /// The system's display name
     pub name: String,
+    /// Brief description of the system's purpose
     pub description: String,
+    /// The language model to use for this system
     pub model: String,
+    /// Color identifier for UI display
     pub color: String,
+    /// When the system was created
     pub created_at: DateTime<Utc>,
+    /// When the system was last updated
     pub updated_at: DateTime<Utc>,
 }
 

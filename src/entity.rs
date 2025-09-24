@@ -1,3 +1,43 @@
+//! # Entity Management System
+//!
+//! This module provides the core entity management capabilities for the stigmergy system.
+//! Entities serve as unique identifiers that can have components attached to them, following
+//! Entity-Component-System (ECS) architectural patterns.
+//!
+//! ## Key Features
+//!
+//! - **URL-Safe Identifiers**: Entities use URL-safe base64 encoding with custom alphabet
+//! - **Deterministic Parsing**: String representation is deterministic and reversible
+//! - **Random Generation**: Support for cryptographically random entity generation
+//! - **HTTP Integration**: Built-in HTTP endpoints for entity lifecycle management
+//! - **Audit Logging**: All operations are logged for persistence and replay
+//!
+//! ## Entity Format
+//!
+//! Entities are represented as "entity:{base64}" where the base64 portion is a URL-safe
+//! encoding of 32 bytes without padding. This format is designed to be:
+//! - Safe for use in URLs and file paths
+//! - Human-readable for debugging
+//! - Deterministic for consistent serialization
+//!
+//! ## Usage Examples
+//!
+//! ```rust
+//! use stigmergy::Entity;
+//!
+//! // Create entity from bytes
+//! let entity = Entity::new([1u8; 32]);
+//! println!("{}", entity); // "entity:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
+//!
+//! // Parse from string
+//! let parsed: Entity = "entity:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE".parse().unwrap();
+//! assert_eq!(entity, parsed);
+//!
+//! // Access underlying bytes
+//! let bytes = entity.as_bytes();
+//! assert_eq!(bytes, &[1u8; 32]);
+//! ```
+
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::fs::File;
 use std::io::Read;
@@ -162,13 +202,23 @@ const BASE64_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwx
 /// Encodes bytes to URL-safe base64 without padding.
 ///
 /// This implementation uses the URL-safe alphabet (RFC 4648 Section 5) and
-/// omits padding characters for a cleaner representation.
+/// omits padding characters for a cleaner representation. The encoding process
+/// converts each group of 3 bytes into 4 base64 characters, handling partial
+/// groups at the end without adding padding.
 ///
 /// # Arguments
 /// * `input` - The bytes to encode
 ///
 /// # Returns
 /// A URL-safe base64 encoded string without padding
+///
+/// # Examples
+/// ```
+/// # use stigmergy::Entity;
+/// let entity = Entity::new([0u8; 32]);
+/// let encoded = entity.to_string();
+/// assert_eq!(encoded, "entity:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+/// ```
 fn encode_base64_url_safe(input: &[u8]) -> String {
     let mut result = String::new();
     let mut i = 0;
@@ -289,11 +339,18 @@ impl Display for Entity {
 }
 
 /// Errors that can occur when parsing an Entity from a string.
+///
+/// This enum represents the different ways that entity string parsing can fail,
+/// providing specific error types for different categories of parsing problems.
 #[derive(Debug, PartialEq, Eq)]
 pub enum EntityParseError {
+    /// The entity string does not start with the required "entity:" prefix
     InvalidPrefix,
+    /// The entity string format is invalid (e.g., wrong length after prefix)
     InvalidFormat,
+    /// The base64 portion contains invalid characters or is malformed
     InvalidBase64,
+    /// The decoded bytes are not exactly 32 bytes in length
     InvalidLength,
 }
 
@@ -439,14 +496,31 @@ pub struct CreateEntityResponse {
     pub created: bool,
 }
 
-/// Creates a new entity.
+/// HTTP endpoint for creating a new entity.
 ///
-/// If no entity is provided in the request, generates a random entity that avoids
-/// URL-unsafe characters (-_) in its base64 representation. Uses a bounded retry
-/// approach to prevent infinite loops.
+/// This endpoint accepts a POST request with an optional entity ID. If no entity
+/// is provided in the request, generates a random entity that avoids URL-unsafe
+/// characters (-_) in its base64 representation using a bounded retry approach
+/// to prevent infinite loops.
+///
+/// # Request Format
+/// ```json
+/// {
+///   "entity": null  // Optional: specific entity to create, or null for random
+/// }
+/// ```
+///
+/// # Response Format
+/// ```json
+/// {
+///   "entity": "entity:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+///   "created": true
+/// }
+/// ```
 ///
 /// # Errors
 /// Returns `StatusCode::INTERNAL_SERVER_ERROR` if random number generation fails.
+/// Returns `StatusCode::CONFLICT` if the entity already exists in the data store.
 async fn create_entity(
     State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
     Json(request): Json<CreateEntityRequest>,
@@ -498,18 +572,27 @@ async fn create_entity(
     Ok(Json(response))
 }
 
-/// Deletes an entity by its base64 identifier.
+/// HTTP endpoint for deleting an entity by its base64 identifier.
 ///
-/// # Arguments
+/// This endpoint accepts a DELETE request with the entity's base64 identifier
+/// (without the "entity:" prefix) in the URL path. The entity is removed from
+/// the data store and all associated components are cascade deleted.
+///
+/// # URL Parameters
 /// * `entity_base64` - The base64 part of the entity ID (without "entity:" prefix)
 ///
 /// # Returns
-/// * `Ok(StatusCode::NO_CONTENT)` - Entity was found and deleted
-/// * `Err(StatusCode::BAD_REQUEST)` - Invalid entity ID format
+/// * `StatusCode::NO_CONTENT` - Entity was found and successfully deleted
+/// * `StatusCode::BAD_REQUEST` - Invalid entity ID format
+/// * `StatusCode::NOT_FOUND` - Entity does not exist in the data store
 ///
-/// # Note
-/// Currently this is a mock implementation that only validates the entity format
-/// but doesn't perform actual deletion from a data store.
+/// # Examples
+/// ```
+/// // DELETE /entity/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+/// // -> 204 No Content (if entity exists)
+/// // -> 400 Bad Request (if malformed)
+/// // -> 404 Not Found (if entity doesn't exist)
+/// ```
 async fn delete_entity(
     State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
     Path(entity_base64): Path<String>,
@@ -558,14 +641,28 @@ async fn delete_entity(
     }
 }
 
-/// Lists all entities stored in the data store.
+/// HTTP endpoint for listing all entities stored in the data store.
 ///
-/// # Arguments
-/// * `State((logger, data_store))` - The application state containing logger and data store
+/// This endpoint returns a JSON array of all entities currently stored in the
+/// system. Each entity is represented in its full "entity:{base64}" format.
 ///
 /// # Returns
-/// * `Ok(Json<Vec<Entity>>)` - List of all entities on success
+/// * `Ok(Json<Vec<Entity>>)` - JSON array of all entities on success
 /// * `Err(StatusCode::INTERNAL_SERVER_ERROR)` - If data store operation fails
+///
+/// # Response Format
+/// ```json
+/// [
+///   "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+///   "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+/// ]
+/// ```
+///
+/// # Examples
+/// ```
+/// // GET /entity
+/// // -> 200 OK with array of entity base64 strings
+/// ```
 async fn list_entities(
     State((_logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
 ) -> Result<Json<Vec<Entity>>, (StatusCode, &'static str)> {

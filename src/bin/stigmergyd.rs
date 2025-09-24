@@ -148,7 +148,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!();
             println!("🛑 Shutdown signal received, stopping server gracefully...");
 
-            // TODO(claude): cleanup this output
             if config.verbose {
                 println!("📊 Final statistics:");
                 println!("   Savefile: {}", config.savefile_path.display());

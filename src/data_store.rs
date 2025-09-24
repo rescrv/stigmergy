@@ -1,80 +1,398 @@
+//! # Data Storage Abstraction
+//!
+//! This module provides the core data storage abstraction for the stigmergy system.
+//! It defines traits and implementations for storing entities, component definitions,
+//! and component instances with full CRUD operations.
+//!
+//! ## Architecture
+//!
+//! The data store system is built around the `DataStore` trait, which provides a
+//! uniform interface for different storage backends. The system supports:
+//!
+//! - **Entity Management**: Create, read, delete entities with unique identifiers
+//! - **Component Definitions**: Manage schemas that define valid component data
+//! - **Component Instances**: Store actual component data attached to entities
+//! - **Transactional Safety**: Operations are atomic where possible
+//! - **Error Handling**: Comprehensive error types for different failure modes
+//!
+//! ## Storage Model
+//!
+//! ```text
+//! Entity (ID) ──┬── Component Definition (Type + Schema)
+//!               └── Component Instance (Type + Data)
+//!                   └── Validated against Definition Schema
+//! ```
+//!
+//! ## Implementations
+//!
+//! - **InMemoryDataStore**: Thread-safe in-memory storage using `Mutex<HashMap>`
+//! - **Future**: File-based, SQLite, or other persistent storage backends
+//!
+//! ## Usage Examples
+//!
+//! ### Basic Entity Operations
+//!
+//! ```rust
+//! use stigmergy::{Entity, InMemoryDataStore, DataStore};
+//! use std::sync::Arc;
+//!
+//! let store = Arc::new(InMemoryDataStore::new());
+//! let entity = Entity::new([1u8; 32]);
+//!
+//! // Create entity
+//! store.create_entity(&entity).unwrap();
+//!
+//! // Retrieve entity
+//! let retrieved = store.get_entity(&entity.to_string()).unwrap();
+//! assert_eq!(retrieved, Some(entity));
+//!
+//! // List all entities
+//! let entities = store.list_entities().unwrap();
+//! assert_eq!(entities.len(), 1);
+//! ```
+
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
 use crate::{ComponentDefinition, Entity, System, SystemId};
 
-/// Type alias for component key-value pairs returned by list operations
+/// Type alias for component key-value pairs returned by list operations.
+///
+/// Each item contains a tuple of `(Entity, String)` representing the entity and
+/// component type, paired with the component's JSON data.
 pub type ComponentList = Vec<((Entity, String), Value)>;
 
-/// Trait for data store operations
+/// Trait defining the core data storage interface for the stigmergy system.
+///
+/// This trait provides a complete CRUD interface for managing entities, component
+/// definitions, and component instances. All methods are designed to be thread-safe
+/// and can be called concurrently from multiple threads.
+///
+/// # Thread Safety
+///
+/// Implementors must ensure that all operations are thread-safe. The trait requires
+/// `Send + Sync` to enable safe sharing across thread boundaries.
+///
+/// # Error Handling
+///
+/// All operations return `Result<T, DataStoreError>` to provide comprehensive error
+/// information. Common error types include:
+/// - `NotFound`: Requested item doesn't exist
+/// - `AlreadyExists`: Item already exists (for create operations)
+/// - `SerializationError`: JSON serialization/deserialization failed
+/// - `Internal`: Internal storage system errors
+///
+/// # Examples
+///
+/// ```rust
+/// use stigmergy::{DataStore, InMemoryDataStore, Entity};
+/// use std::sync::Arc;
+///
+/// let store: Arc<dyn DataStore> = Arc::new(InMemoryDataStore::new());
+/// let entity = Entity::new([1u8; 32]);
+///
+/// // All DataStore methods are available
+/// store.create_entity(&entity).unwrap();
+/// let found = store.get_entity(&entity.to_string()).unwrap();
+/// assert_eq!(found, Some(entity));
+/// ```
 pub trait DataStore: Send + Sync {
     // Entity operations
+
+    /// Creates a new entity in the data store.
+    ///
+    /// # Arguments
+    /// * `entity` - The entity to create
+    ///
+    /// # Returns
+    /// * `Ok(())` - Entity created successfully
+    /// * `Err(DataStoreError::AlreadyExists)` - Entity already exists
+    /// * `Err(DataStoreError::Internal)` - Internal storage error
     fn create_entity(&self, entity: &Entity) -> Result<(), DataStoreError>;
+
+    /// Retrieves an entity by its string identifier.
+    ///
+    /// # Arguments
+    /// * `entity_id` - The entity ID string (e.g., "entity:AAAA...")
+    ///
+    /// # Returns
+    /// * `Ok(Some(Entity))` - Entity found and returned
+    /// * `Ok(None)` - Entity not found
+    /// * `Err(DataStoreError::Internal)` - Internal storage error
     fn get_entity(&self, entity_id: &str) -> Result<Option<Entity>, DataStoreError>;
+
+    /// Deletes an entity and all its associated components.
+    ///
+    /// This operation performs cascade deletion - all components belonging
+    /// to the entity are also removed from the data store.
+    ///
+    /// # Arguments
+    /// * `entity_id` - The entity ID string to delete
+    ///
+    /// # Returns
+    /// * `Ok(true)` - Entity existed and was deleted
+    /// * `Ok(false)` - Entity did not exist
+    /// * `Err(DataStoreError::Internal)` - Internal storage error
     fn delete_entity(&self, entity_id: &str) -> Result<bool, DataStoreError>;
+
+    /// Lists all entities stored in the data store.
+    ///
+    /// # Returns
+    /// * `Ok(Vec<Entity>)` - All entities in the store
+    /// * `Err(DataStoreError::Internal)` - Internal storage error
     fn list_entities(&self) -> Result<Vec<Entity>, DataStoreError>;
 
     // Component Definition operations
+
+    /// Creates a new component definition.
+    ///
+    /// # Arguments
+    /// * `id` - Unique identifier for the component definition
+    /// * `definition` - The component definition containing type and schema
+    ///
+    /// # Returns
+    /// * `Ok(())` - Definition created successfully
+    /// * `Err(DataStoreError::AlreadyExists)` - Definition with this ID already exists
+    /// * `Err(DataStoreError::Internal)` - Internal storage error
     fn create_component_definition(
         &self,
         id: &str,
         definition: &ComponentDefinition,
     ) -> Result<(), DataStoreError>;
+
+    /// Retrieves a component definition by its identifier.
+    ///
+    /// # Arguments
+    /// * `id` - The component definition identifier
+    ///
+    /// # Returns
+    /// * `Ok(Some(ComponentDefinition))` - Definition found and returned
+    /// * `Ok(None)` - Definition not found
+    /// * `Err(DataStoreError::Internal)` - Internal storage error
     fn get_component_definition(
         &self,
         id: &str,
     ) -> Result<Option<ComponentDefinition>, DataStoreError>;
+
+    /// Updates an existing component definition.
+    ///
+    /// # Arguments
+    /// * `id` - The component definition identifier
+    /// * `definition` - The new component definition
+    ///
+    /// # Returns
+    /// * `Ok(true)` - Definition existed and was updated
+    /// * `Ok(false)` - Definition did not exist
+    /// * `Err(DataStoreError::Internal)` - Internal storage error
     fn update_component_definition(
         &self,
         id: &str,
         definition: &ComponentDefinition,
     ) -> Result<bool, DataStoreError>;
+
+    /// Deletes a component definition.
+    ///
+    /// # Arguments
+    /// * `id` - The component definition identifier to delete
+    ///
+    /// # Returns
+    /// * `Ok(true)` - Definition existed and was deleted
+    /// * `Ok(false)` - Definition did not exist
+    /// * `Err(DataStoreError::Internal)` - Internal storage error
     fn delete_component_definition(&self, id: &str) -> Result<bool, DataStoreError>;
+
+    /// Deletes all component definitions.
+    ///
+    /// # Returns
+    /// * `Ok(u32)` - Number of definitions deleted
+    /// * `Err(DataStoreError::Internal)` - Internal storage error
     fn delete_all_component_definitions(&self) -> Result<u32, DataStoreError>;
+
+    /// Lists all component definitions.
+    ///
+    /// # Returns
+    /// * `Ok(Vec<(String, ComponentDefinition)>)` - All definitions with their IDs
+    /// * `Err(DataStoreError::Internal)` - Internal storage error
     fn list_component_definitions(
         &self,
     ) -> Result<Vec<(String, ComponentDefinition)>, DataStoreError>;
 
-    // Component Instance operations - now entity-scoped
+    // Component Instance operations - entity-scoped
+
+    /// Creates a component instance attached to an entity.
+    ///
+    /// Components are scoped to entities - the same component type can have
+    /// different data for different entities. The entity must exist before
+    /// components can be attached to it.
+    ///
+    /// # Arguments
+    /// * `entity` - The entity to attach the component to
+    /// * `id` - The component type identifier
+    /// * `data` - The component data (should be validated against schema)
+    ///
+    /// # Returns
+    /// * `Ok(())` - Component created successfully
+    /// * `Err(DataStoreError::NotFound)` - Entity doesn't exist
+    /// * `Err(DataStoreError::AlreadyExists)` - Component already exists for this entity
+    /// * `Err(DataStoreError::Internal)` - Internal storage error
     fn create_component(
         &self,
         entity: &Entity,
         id: &str,
         data: &Value,
     ) -> Result<(), DataStoreError>;
+
+    /// Retrieves a component instance for a specific entity.
+    ///
+    /// # Arguments
+    /// * `entity` - The entity that owns the component
+    /// * `id` - The component type identifier
+    ///
+    /// # Returns
+    /// * `Ok(Some(Value))` - Component found and returned
+    /// * `Ok(None)` - Component not found for this entity
+    /// * `Err(DataStoreError::Internal)` - Internal storage error
     fn get_component(&self, entity: &Entity, id: &str) -> Result<Option<Value>, DataStoreError>;
+
+    /// Updates a component instance for a specific entity.
+    ///
+    /// # Arguments
+    /// * `entity` - The entity that owns the component
+    /// * `id` - The component type identifier
+    /// * `data` - The new component data
+    ///
+    /// # Returns
+    /// * `Ok(true)` - Component existed and was updated
+    /// * `Ok(false)` - Component did not exist for this entity
+    /// * `Err(DataStoreError::Internal)` - Internal storage error
     fn update_component(
         &self,
         entity: &Entity,
         id: &str,
         data: &Value,
     ) -> Result<bool, DataStoreError>;
+
+    /// Deletes a component instance from a specific entity.
+    ///
+    /// # Arguments
+    /// * `entity` - The entity that owns the component
+    /// * `id` - The component type identifier to delete
+    ///
+    /// # Returns
+    /// * `Ok(true)` - Component existed and was deleted
+    /// * `Ok(false)` - Component did not exist for this entity
+    /// * `Err(DataStoreError::Internal)` - Internal storage error
     fn delete_component(&self, entity: &Entity, id: &str) -> Result<bool, DataStoreError>;
+
+    /// Deletes all component instances for a specific entity.
+    ///
+    /// # Arguments
+    /// * `entity` - The entity whose components should be deleted
+    ///
+    /// # Returns
+    /// * `Ok(u32)` - Number of components deleted
+    /// * `Err(DataStoreError::Internal)` - Internal storage error
     fn delete_all_components_for_entity(&self, entity: &Entity) -> Result<u32, DataStoreError>;
+
+    /// Deletes all component instances from all entities.
+    ///
+    /// # Returns
+    /// * `Ok(u32)` - Number of components deleted
+    /// * `Err(DataStoreError::Internal)` - Internal storage error
     fn delete_all_components(&self) -> Result<u32, DataStoreError>;
+
+    /// Lists all component instances for a specific entity.
+    ///
+    /// # Arguments
+    /// * `entity` - The entity whose components should be listed
+    ///
+    /// # Returns
+    /// * `Ok(Vec<(String, Value)>)` - Component type and data pairs
+    /// * `Err(DataStoreError::Internal)` - Internal storage error
     fn list_components_for_entity(
         &self,
         entity: &Entity,
     ) -> Result<Vec<(String, Value)>, DataStoreError>;
+
+    /// Lists all component instances across all entities.
+    ///
+    /// # Returns
+    /// * `Ok(ComponentList)` - All components with their entity and type information
+    /// * `Err(DataStoreError::Internal)` - Internal storage error
     fn list_components(&self) -> Result<ComponentList, DataStoreError>;
 
     // System operations
+
+    /// Creates a new system in the data store.
+    ///
+    /// # Arguments
+    /// * `system` - The system to create
+    ///
+    /// # Returns
+    /// * `Ok(())` - System created successfully
+    /// * `Err(DataStoreError::AlreadyExists)` - System with this ID already exists
+    /// * `Err(DataStoreError::Internal)` - Internal storage error
     fn create_system(&self, system: &System) -> Result<(), DataStoreError>;
+    /// Retrieves a system by its identifier.
+    ///
+    /// # Arguments
+    /// * `system_id` - The system identifier
+    ///
+    /// # Returns
+    /// * `Ok(Some(System))` - System found and returned
+    /// * `Ok(None)` - System not found
+    /// * `Err(DataStoreError::Internal)` - Internal storage error
     fn get_system(&self, system_id: &SystemId) -> Result<Option<System>, DataStoreError>;
+    /// Updates an existing system.
+    ///
+    /// # Arguments
+    /// * `system` - The system with updated data
+    ///
+    /// # Returns
+    /// * `Ok(true)` - System existed and was updated
+    /// * `Ok(false)` - System did not exist
+    /// * `Err(DataStoreError::Internal)` - Internal storage error
     fn update_system(&self, system: &System) -> Result<bool, DataStoreError>;
+    /// Deletes a system from the data store.
+    ///
+    /// # Arguments
+    /// * `system_id` - The system identifier to delete
+    ///
+    /// # Returns
+    /// * `Ok(true)` - System existed and was deleted
+    /// * `Ok(false)` - System did not exist
+    /// * `Err(DataStoreError::Internal)` - Internal storage error
     fn delete_system(&self, system_id: &SystemId) -> Result<bool, DataStoreError>;
+    /// Deletes all systems from the data store.
+    ///
+    /// # Returns
+    /// * `Ok(u32)` - Number of systems deleted
+    /// * `Err(DataStoreError::Internal)` - Internal storage error
     fn delete_all_systems(&self) -> Result<u32, DataStoreError>;
+    /// Lists all systems in the data store.
+    ///
+    /// # Returns
+    /// * `Ok(Vec<System>)` - All systems in the store
+    /// * `Err(DataStoreError::Internal)` - Internal storage error
     fn list_systems(&self) -> Result<Vec<System>, DataStoreError>;
 }
 
-/// Errors that can occur during data store operations
+/// Errors that can occur during data store operations.
+///
+/// This enum provides comprehensive error information for all data store operations,
+/// enabling callers to handle different failure modes appropriately.
 #[derive(Debug, Clone)]
 pub enum DataStoreError {
+    /// The requested item was not found in the data store
     NotFound,
+    /// An item with the same identifier already exists
     AlreadyExists,
+    /// JSON serialization or deserialization failed
     SerializationError(String),
+    /// An I/O operation failed (for persistent storage backends)
     IoError(String),
+    /// An internal storage system error occurred
     Internal(String),
 }
 
@@ -92,7 +410,51 @@ impl std::fmt::Display for DataStoreError {
 
 impl std::error::Error for DataStoreError {}
 
-/// Simple in-memory data store implementation
+/// Thread-safe in-memory implementation of the DataStore trait.
+///
+/// This implementation stores all data in memory using `HashMap` collections
+/// protected by `Mutex` for thread safety. It's suitable for development,
+/// testing, and applications that don't require persistent storage.
+///
+/// # Thread Safety
+///
+/// All operations are protected by `Mutex` locks, making this implementation
+/// fully thread-safe. However, fine-grained locking is used - operations on
+/// different data types (entities, definitions, components) can proceed
+/// concurrently.
+///
+/// # Storage Structure
+///
+/// - **Entities**: `HashMap<String, Entity>` - entity ID string -> entity
+/// - **Component Definitions**: `HashMap<String, ComponentDefinition>` - definition ID -> definition
+/// - **Component Instances**: `HashMap<(Entity, String), Value>` - (entity, component type) -> data
+///
+/// # Performance Characteristics
+///
+/// - **Create/Read/Update/Delete**: O(1) average case for hash map operations
+/// - **List operations**: O(n) where n is the number of items
+/// - **Memory usage**: All data kept in RAM, no persistence across restarts
+///
+/// # Examples
+///
+/// ```rust
+/// use stigmergy::{InMemoryDataStore, DataStore, Entity};
+/// use std::sync::Arc;
+///
+/// // Create a shared data store
+/// let store = Arc::new(InMemoryDataStore::new());
+///
+/// // Use it from multiple threads
+/// let entity = Entity::new([1u8; 32]);
+/// store.create_entity(&entity).unwrap();
+///
+/// // The store can be safely shared and used concurrently
+/// let store_clone = Arc::clone(&store);
+/// std::thread::spawn(move || {
+///     let entities = store_clone.list_entities().unwrap();
+///     assert_eq!(entities.len(), 1);
+/// });
+/// ```
 pub struct InMemoryDataStore {
     entities: Mutex<HashMap<String, Entity>>,
     component_definitions: Mutex<HashMap<String, ComponentDefinition>>,
@@ -101,6 +463,19 @@ pub struct InMemoryDataStore {
 }
 
 impl InMemoryDataStore {
+    /// Creates a new empty in-memory data store.
+    ///
+    /// The data store is initialized with empty collections for entities,
+    /// component definitions, and component instances.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use stigmergy::InMemoryDataStore;
+    ///
+    /// let store = InMemoryDataStore::new();
+    /// // Store is ready to use with all collections empty
+    /// ```
     pub fn new() -> Self {
         Self {
             entities: Mutex::new(HashMap::new()),

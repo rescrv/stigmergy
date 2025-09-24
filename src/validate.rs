@@ -1,30 +1,85 @@
+//! # JSON Schema Validation
+//!
+//! This module provides JSON schema validation capabilities for the stigmergy system.
+//! It validates JSON data against JSON schemas, supporting all standard JSON Schema
+//! features including primitive types, objects, arrays, enums, and oneOf unions.
+//!
+//! ## Key Features
+//!
+//! - **Complete Type Support**: Validates null, boolean, integer, number, string, array, and object types
+//! - **Complex Validation**: Supports nested objects, arrays, and oneOf unions for enum-like structures
+//! - **Schema Validation**: Can validate schemas themselves for structural correctness
+//! - **Descriptive Errors**: Provides detailed error messages with context about what failed
+//!
+//! ## Usage Examples
+//!
+//! ```rust
+//! use stigmergy::validate_value;
+//! use serde_json::json;
+//!
+//! let schema = json!({
+//!     "type": "object",
+//!     "properties": {
+//!         "name": {"type": "string"},
+//!         "age": {"type": "integer"}
+//!     },
+//!     "required": ["name"]
+//! });
+//!
+//! let valid_data = json!({"name": "Alice", "age": 30});
+//! assert!(validate_value(&valid_data, &schema).is_ok());
+//!
+//! let invalid_data = json!({"age": 30}); // missing required "name"
+//! assert!(validate_value(&invalid_data, &schema).is_err());
+//! ```
+
 use serde_json::{Map, Value};
 
 use crate::json_schema::{
-    ENUM_KEY, ITEMS_KEY, JsonSchema, ONE_OF_KEY, PROPERTIES_KEY, REQUIRED_KEY, TYPE_ARRAY,
+    ENUM_KEY, ITEMS_KEY, JsonSchemaBuilder, ONE_OF_KEY, PROPERTIES_KEY, REQUIRED_KEY, TYPE_ARRAY,
     TYPE_BOOLEAN, TYPE_INTEGER, TYPE_KEY, TYPE_NULL, TYPE_NUMBER, TYPE_OBJECT, TYPE_STRING,
+    get_value_type,
 };
 
+/// Errors that can occur during JSON schema validation.
+///
+/// This enum provides detailed information about validation failures, including
+/// the specific type of error and context about where the validation failed.
 #[derive(Debug, Clone)]
 pub enum ValidationError {
+    /// The JSON schema itself is invalid or malformed
     InvalidSchema(String),
+    /// The value type doesn't match what the schema expects
     TypeMismatch {
+        /// The type that was expected by the schema
         expected: String,
+        /// The actual type of the value being validated
         actual: String,
     },
+    /// A required object property is missing
     MissingRequiredProperty {
+        /// The name of the missing required property
         property: String,
     },
+    /// The value doesn't match any of the allowed enum values
     EnumMismatch {
+        /// The actual value that was provided
         value: String,
+        /// The list of values that would have been valid
         allowed_values: Vec<String>,
     },
+    /// An array item failed validation
     ArrayItemError {
+        /// The index of the array item that failed
         index: usize,
+        /// The underlying validation error for the item
         source: Box<ValidationError>,
     },
+    /// An object property failed validation
     ObjectPropertyError {
+        /// The name of the property that failed
         property: String,
+        /// The underlying validation error for the property
         source: Box<ValidationError>,
     },
 }
@@ -61,12 +116,58 @@ impl std::fmt::Display for ValidationError {
 
 impl std::error::Error for ValidationError {}
 
-impl JsonSchema {
+impl JsonSchemaBuilder {
+    /// Validates a JSON value against this schema.
+    ///
+    /// # Arguments
+    /// * `value` - The JSON value to validate
+    ///
+    /// # Returns
+    /// * `Ok(())` - The value is valid according to the schema
+    /// * `Err(ValidationError)` - The value failed validation with details
+    ///
+    /// # Examples
+    /// ```rust
+    /// use stigmergy::JsonSchemaBuilder;
+    /// use serde_json::json;
+    ///
+    /// // Create a schema from example string data
+    /// let schema = JsonSchemaBuilder::from_value(&json!("example")).unwrap();
+    /// assert!(schema.validate(&json!("hello")).is_ok());
+    /// assert!(schema.validate(&json!(42)).is_err());
+    /// ```
     pub fn validate(&self, value: &Value) -> Result<(), ValidationError> {
         validate_value(value, self.as_value())
     }
 }
 
+/// Validates a JSON value against a JSON schema.
+///
+/// This is the primary validation function that checks whether a JSON value
+/// conforms to the given JSON schema specification. It supports all standard
+/// JSON Schema features including type validation, object properties, array
+/// items, enumerations, and oneOf unions.
+///
+/// # Arguments
+/// * `value` - The JSON value to validate
+/// * `schema` - The JSON schema to validate against
+///
+/// # Returns
+/// * `Ok(())` - The value is valid according to the schema
+/// * `Err(ValidationError)` - The value failed validation with specific error details
+///
+/// # Examples
+/// ```rust
+/// use stigmergy::validate_value;
+/// use serde_json::json;
+///
+/// let schema = json!({"type": "number", "minimum": 0});
+/// let valid_value = json!(42);
+/// let invalid_value = json!("not a number");
+///
+/// assert!(validate_value(&valid_value, &schema).is_ok());
+/// assert!(validate_value(&invalid_value, &schema).is_err());
+/// ```
 pub fn validate_value(value: &Value, schema: &Value) -> Result<(), ValidationError> {
     let schema_obj = schema
         .as_object()
@@ -294,39 +395,21 @@ fn validate_object(value: &Value, schema: &Map<String, Value>) -> Result<(), Val
     Ok(())
 }
 
-fn get_value_type(value: &Value) -> String {
-    match value {
-        Value::Null => TYPE_NULL.to_string(),
-        Value::Bool(_) => TYPE_BOOLEAN.to_string(),
-        Value::Number(n) => {
-            if n.is_i64() || n.is_u64() {
-                TYPE_INTEGER.to_string()
-            } else {
-                TYPE_NUMBER.to_string()
-            }
-        }
-        Value::String(_) => TYPE_STRING.to_string(),
-        Value::Array(_) => TYPE_ARRAY.to_string(),
-        Value::Object(_) => TYPE_OBJECT.to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::JsonSchema;
     use serde_json::json;
 
     #[test]
     fn validate_null_success() {
-        let schema = JsonSchema::from_value(&json!(null)).unwrap();
+        let schema = JsonSchemaBuilder::from_value(&json!(null)).unwrap();
         let value = json!(null);
         assert!(schema.validate(&value).is_ok());
     }
 
     #[test]
     fn validate_null_failure() {
-        let schema = JsonSchema::from_value(&json!(null)).unwrap();
+        let schema = JsonSchemaBuilder::from_value(&json!(null)).unwrap();
         let value = json!("not null");
         let result = schema.validate(&value);
         assert!(result.is_err());
@@ -338,14 +421,14 @@ mod tests {
 
     #[test]
     fn validate_boolean_success() {
-        let schema = JsonSchema::from_value(&json!(true)).unwrap();
+        let schema = JsonSchemaBuilder::from_value(&json!(true)).unwrap();
         assert!(schema.validate(&json!(true)).is_ok());
         assert!(schema.validate(&json!(false)).is_ok());
     }
 
     #[test]
     fn validate_boolean_failure() {
-        let schema = JsonSchema::from_value(&json!(true)).unwrap();
+        let schema = JsonSchemaBuilder::from_value(&json!(true)).unwrap();
         let result = schema.validate(&json!("true"));
         assert!(result.is_err());
         assert!(matches!(
@@ -356,14 +439,14 @@ mod tests {
 
     #[test]
     fn validate_integer_success() {
-        let schema = JsonSchema::from_value(&json!(42)).unwrap();
+        let schema = JsonSchemaBuilder::from_value(&json!(42)).unwrap();
         assert!(schema.validate(&json!(42)).is_ok());
         assert!(schema.validate(&json!(-10)).is_ok());
     }
 
     #[test]
     fn validate_integer_failure() {
-        let schema = JsonSchema::from_value(&json!(42)).unwrap();
+        let schema = JsonSchemaBuilder::from_value(&json!(42)).unwrap();
         let result = schema.validate(&json!(2.5));
         assert!(result.is_err());
         assert!(matches!(
@@ -374,14 +457,14 @@ mod tests {
 
     #[test]
     fn validate_number_success() {
-        let schema = JsonSchema::from_value(&json!(2.5)).unwrap();
+        let schema = JsonSchemaBuilder::from_value(&json!(2.5)).unwrap();
         assert!(schema.validate(&json!(2.5)).is_ok());
         assert!(schema.validate(&json!(42)).is_ok());
     }
 
     #[test]
     fn validate_number_failure() {
-        let schema = JsonSchema::from_value(&json!(2.5)).unwrap();
+        let schema = JsonSchemaBuilder::from_value(&json!(2.5)).unwrap();
         let result = schema.validate(&json!("2.5"));
         assert!(result.is_err());
         assert!(matches!(
@@ -392,14 +475,14 @@ mod tests {
 
     #[test]
     fn validate_string_success() {
-        let schema = JsonSchema::from_value(&json!("hello")).unwrap();
+        let schema = JsonSchemaBuilder::from_value(&json!("hello")).unwrap();
         assert!(schema.validate(&json!("hello")).is_ok());
         assert!(schema.validate(&json!("world")).is_ok());
     }
 
     #[test]
     fn validate_string_failure() {
-        let schema = JsonSchema::from_value(&json!("hello")).unwrap();
+        let schema = JsonSchemaBuilder::from_value(&json!("hello")).unwrap();
         let result = schema.validate(&json!(123));
         assert!(result.is_err());
         assert!(matches!(
@@ -410,7 +493,7 @@ mod tests {
 
     #[test]
     fn validate_array_homogeneous_success() {
-        let schema = JsonSchema::from_value(&json!([1, 2, 3])).unwrap();
+        let schema = JsonSchemaBuilder::from_value(&json!([1, 2, 3])).unwrap();
         assert!(schema.validate(&json!([1, 2, 3])).is_ok());
         assert!(schema.validate(&json!([42])).is_ok());
         assert!(schema.validate(&json!([])).is_ok());
@@ -418,7 +501,7 @@ mod tests {
 
     #[test]
     fn validate_array_homogeneous_failure() {
-        let schema = JsonSchema::from_value(&json!([1, 2, 3])).unwrap();
+        let schema = JsonSchemaBuilder::from_value(&json!([1, 2, 3])).unwrap();
         let result = schema.validate(&json!(["string"]));
         assert!(result.is_err());
         assert!(matches!(
@@ -429,13 +512,13 @@ mod tests {
 
     #[test]
     fn validate_array_heterogeneous_success() {
-        let schema = JsonSchema::from_value(&json!([1, "hello", true])).unwrap();
+        let schema = JsonSchemaBuilder::from_value(&json!([1, "hello", true])).unwrap();
         assert!(schema.validate(&json!([42, "world", false])).is_ok());
     }
 
     #[test]
     fn validate_array_heterogeneous_failure() {
-        let schema = JsonSchema::from_value(&json!([1, "hello", true])).unwrap();
+        let schema = JsonSchemaBuilder::from_value(&json!([1, "hello", true])).unwrap();
         let result = schema.validate(&json!([42, 123, false]));
         assert!(result.is_err());
         assert!(matches!(
@@ -446,7 +529,7 @@ mod tests {
 
     #[test]
     fn validate_object_success() {
-        let schema = JsonSchema::from_value(&json!({
+        let schema = JsonSchemaBuilder::from_value(&json!({
             "name": "John",
             "age": 30,
             "active": true
@@ -466,7 +549,7 @@ mod tests {
 
     #[test]
     fn validate_object_failure_wrong_type() {
-        let schema = JsonSchema::from_value(&json!({
+        let schema = JsonSchemaBuilder::from_value(&json!({
             "name": "John",
             "age": 30
         }))
@@ -485,7 +568,7 @@ mod tests {
 
     #[test]
     fn validate_object_missing_required_property() {
-        let schema = JsonSchema::from_value(&json!({
+        let schema = JsonSchemaBuilder::from_value(&json!({
             "name": "John",
             "age": 30
         }))
@@ -503,7 +586,7 @@ mod tests {
 
     #[test]
     fn validate_nested_object_success() {
-        let schema = JsonSchema::from_value(&json!({
+        let schema = JsonSchemaBuilder::from_value(&json!({
             "user": {
                 "name": "John",
                 "email": "john@example.com"
@@ -539,7 +622,7 @@ mod tests {
                 }
             ]
         });
-        let schema = JsonSchema::from_value(&schema_value).unwrap();
+        let schema = JsonSchemaBuilder::from_value(&schema_value).unwrap();
 
         let valid_data = json!({
             "metadata": {
@@ -575,13 +658,13 @@ mod tests {
 
     #[test]
     fn validate_empty_array() {
-        let schema = JsonSchema::from_value(&json!([])).unwrap();
+        let schema = JsonSchemaBuilder::from_value(&json!([])).unwrap();
         assert!(schema.validate(&json!([])).is_ok());
     }
 
     #[test]
     fn validate_empty_object() {
-        let schema = JsonSchema::from_value(&json!({})).unwrap();
+        let schema = JsonSchemaBuilder::from_value(&json!({})).unwrap();
         assert!(schema.validate(&json!({})).is_ok());
         assert!(schema.validate(&json!({"extra": "field"})).is_ok());
     }
@@ -638,7 +721,7 @@ mod tests {
 
     #[test]
     fn validate_array_item_error_context() {
-        let schema = JsonSchema::from_value(&json!([1, 2, 3])).unwrap();
+        let schema = JsonSchemaBuilder::from_value(&json!([1, 2, 3])).unwrap();
         let result = schema.validate(&json!([1, "invalid", 3]));
 
         match result.unwrap_err() {
@@ -652,7 +735,7 @@ mod tests {
 
     #[test]
     fn validate_object_property_error_context() {
-        let schema = JsonSchema::from_value(&json!({
+        let schema = JsonSchemaBuilder::from_value(&json!({
             "name": "test",
             "count": 42
         }))

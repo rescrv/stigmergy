@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "derive"]
+
 [package]
 name = "stigmergy"
 version = "0.1.0"
@@ -6,6 +9,7 @@ edition = "2024"
 [dependencies]
 arrrg = "0.8.0"
 arrrg_derive = "0.8.0"
+stigmergy-derive = { path = "derive" }
 axum = "0.7"
 getopts = "0.2"
 one_two_eight = "0.10.0"

@@ -1,19 +1,100 @@
+//! # System Configuration Parser
+//!
+//! This module provides parsing capabilities for system configuration files that use
+//! frontmatter-delimited format. Configuration files contain YAML-like frontmatter
+//! between `---` delimiters, followed by markdown content.
+//!
+//! ## File Format
+//!
+//! ```text
+//! ---
+//! name: example-system
+//! description: An example system configuration
+//! tools: Tool1, Tool2, Tool3
+//! model: inherit
+//! color: blue
+//! ---
+//!
+//! This is the system content in markdown format.
+//! It can contain multiple lines and markdown formatting.
+//! ```
+//!
+//! ## Features
+//!
+//! - **Frontmatter Parsing**: Extracts key-value pairs from YAML-like headers
+//! - **Content Extraction**: Preserves markdown content after frontmatter
+//! - **Required Fields**: Validates presence of required configuration fields
+//! - **Tool Lists**: Automatically parses comma-separated tool lists
+//! - **Error Handling**: Comprehensive error reporting for malformed files
+//!
+//! ## Usage Examples
+//!
+//! ```rust
+//! use stigmergy::SystemParser;
+//!
+//! let config_content = r#"---
+//! name: my-system
+//! description: A sample system configuration
+//! tools: Glob, Grep, Read
+//! model: inherit
+//! color: green
+//! ---
+//!
+//! # My System
+//!
+//! This system does amazing things.
+//! "#;
+//!
+//! let config = SystemParser::parse(config_content).unwrap();
+//! assert_eq!(config.name, "my-system");
+//! assert_eq!(config.tools, vec!["Glob", "Grep", "Read"]);
+//! assert_eq!(config.content.trim(), "My System\n\nThis system does amazing things.");
+//! ```
+
 use std::collections::HashMap;
 
+/// A parsed system configuration containing metadata and content.
+///
+/// This structure represents a complete system configuration file,
+/// with the frontmatter parsed into structured fields and the
+/// remaining content preserved as markdown text.
+///
+/// # Fields
+///
+/// All fields except `content` are extracted from the frontmatter section:
+/// - `name`: System identifier (required)
+/// - `description`: Human-readable description (required)
+/// - `tools`: List of available tools (required, comma-separated in source)
+/// - `model`: Model specification (required)
+/// - `color`: UI color identifier (required)
+/// - `content`: Markdown content after frontmatter
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SystemConfig {
+    /// The system name (required field)
     pub name: String,
+    /// A description of what the system does (required field)
     pub description: String,
+    /// List of tools available to the system (required field, parsed from comma-separated values)
     pub tools: Vec<String>,
+    /// The model configuration (required field, often "inherit")
     pub model: String,
+    /// The color theme for the system (required field)
     pub color: String,
+    /// The markdown content that follows the frontmatter
     pub content: String,
 }
 
+/// Errors that can occur when parsing system configuration files.
+///
+/// This enum represents the different ways that system configuration parsing can fail,
+/// providing specific error types for different categories of parsing problems.
 #[derive(Debug)]
 pub enum ParseError {
+    /// The configuration file does not contain frontmatter delimited by "---"
     NoFrontmatter,
+    /// A required field is missing from the frontmatter
     MissingRequiredField(String),
+    /// A validation error occurred during parsing or validation
     ValidationError(String),
 }
 
@@ -32,6 +113,22 @@ impl std::fmt::Display for ParseError {
 impl std::error::Error for ParseError {}
 
 impl SystemConfig {
+    /// Validates the system configuration against business rules and constraints.
+    ///
+    /// This method checks that all configuration values meet the system requirements,
+    /// including field length limits, valid color values, and other constraints.
+    ///
+    /// # Returns
+    /// * `Ok(())` - Configuration is valid
+    /// * `Err(ParseError::ValidationError)` - One or more validation rules failed
+    ///
+    /// # Validation Rules
+    /// - Name: 1-100 characters, non-empty
+    /// - Description: 1-500 characters, non-empty
+    /// - Color: Basic color name or hex format (#RRGGBB)
+    /// - Model: Non-empty string
+    /// - Content: Maximum 10KB
+    /// - Tools: Each tool name 1-50 characters, non-empty
     pub fn validate(&self) -> Result<(), ParseError> {
         // Validate name length (1-100 characters)
         if self.name.is_empty() {
@@ -110,9 +207,81 @@ impl SystemConfig {
     }
 }
 
+/// Parser for system configuration files with frontmatter and markdown content.
+///
+/// This parser handles configuration files that use Jekyll-style frontmatter format,
+/// with YAML-like key-value pairs between `---` delimiters followed by markdown content.
+/// It validates the presence of required fields and properly structures the data.
+///
+/// # Examples
+///
+/// ```rust
+/// use stigmergy::SystemParser;
+///
+/// let content = r#"---
+/// name: example
+/// description: Example configuration
+/// tools: Tool1, Tool2
+/// model: gpt-4
+/// color: blue
+/// ---
+///
+/// # Example Configuration
+/// This is the content section.
+/// "#;
+///
+/// let config = SystemParser::parse(content).unwrap();
+/// assert_eq!(config.name, "example");
+/// assert_eq!(config.tools, vec!["Tool1", "Tool2"]);
+/// ```
 pub struct SystemParser;
 
 impl SystemParser {
+    /// Parses a system configuration file from its string content.
+    ///
+    /// This method extracts frontmatter metadata and markdown content from a
+    /// configuration file, validating that all required fields are present
+    /// and properly formatted.
+    ///
+    /// # Arguments
+    /// * `content` - The full content of the configuration file
+    ///
+    /// # Returns
+    /// * `Ok(SystemConfig)` - Successfully parsed configuration
+    /// * `Err(ParseError)` - Error during parsing (missing frontmatter, required fields, etc.)
+    ///
+    /// # Required Fields
+    /// - `name`: System identifier
+    /// - `description`: Human-readable description
+    /// - `tools`: Comma-separated list of available tools
+    /// - `model`: Model specification
+    /// - `color`: UI color identifier
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use stigmergy::SystemParser;
+    ///
+    /// let content = r#"---
+    /// name: test-system
+    /// description: A test system
+    /// tools: Grep, Glob
+    /// model: inherit
+    /// color: red
+    /// ---
+    ///
+    /// System content goes here.
+    /// "#;
+    ///
+    /// let config = SystemParser::parse(content).unwrap();
+    /// assert_eq!(config.name, "test-system");
+    /// assert_eq!(config.tools.len(), 2);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// - `ParseError::NoFrontmatter` - File doesn't start with `---` or doesn't have closing `---`
+    /// - `ParseError::MissingRequiredField` - One or more required fields are missing
     pub fn parse(content: &str) -> Result<SystemConfig, ParseError> {
         let (header_section, markdown_content) = Self::split_frontmatter(content)?;
         let header_data = Self::parse_header_section(&header_section)?;

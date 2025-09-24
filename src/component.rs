@@ -1,3 +1,76 @@
+//! # Component System
+//!
+//! This module implements the component system for the stigmergy architecture, providing
+//! typed data structures that can be attached to entities. The system follows Entity-
+//! Component-System (ECS) patterns where components represent data and behavior.
+//!
+//! ## Key Features
+//!
+//! - **Type-Safe Components**: Component types follow Rust identifier conventions
+//! - **Schema Validation**: All component data is validated against JSON schemas
+//! - **HTTP API**: Complete REST API for component definition and instance management
+//! - **Flexible Schemas**: Support for complex schemas including oneOf unions and enums
+//! - **Entity Scoping**: Components are scoped to specific entities
+//!
+//! ## Component Architecture
+//!
+//! The component system has two main concepts:
+//!
+//! 1. **Component Definitions**: Schema definitions that specify what data is valid
+//! 2. **Component Instances**: Actual data attached to entities, validated against schemas
+//!
+//! ## Usage Examples
+//!
+//! ### Creating Component Definitions
+//!
+//! ```rust
+//! use stigmergy::{Component, ComponentDefinition};
+//! use serde_json::json;
+//!
+//! // Define a component type
+//! let position_component = Component::new("Position").unwrap();
+//!
+//! // Create a schema for 3D position data
+//! let schema = json!({
+//!     "type": "object",
+//!     "properties": {
+//!         "x": { "type": "number" },
+//!         "y": { "type": "number" },
+//!         "z": { "type": "number" }
+//!     },
+//!     "required": ["x", "y", "z"]
+//! });
+//!
+//! let definition = ComponentDefinition::new(position_component, schema);
+//! assert!(definition.validate_schema().is_ok());
+//! ```
+//!
+//! ### Validating Component Data
+//!
+//! ```rust
+//! # use stigmergy::{Component, ComponentDefinition};
+//! # use serde_json::json;
+//! # let position_component = Component::new("Position").unwrap();
+//! # let schema = json!({
+//! #     "type": "object",
+//! #     "properties": {
+//! #         "x": { "type": "number" },
+//! #         "y": { "type": "number" },
+//! #         "z": { "type": "number" }
+//! #     },
+//! #     "required": ["x", "y", "z"]
+//! # });
+//! # let definition = ComponentDefinition::new(position_component, schema);
+//!
+//! // Valid data
+//! let valid_data = json!({"x": 1.0, "y": 2.0, "z": 3.0});
+//! assert!(definition.validate_component_data(&valid_data).is_ok());
+//!
+//! // Invalid data (missing required field)
+//! let invalid_data = json!({"x": 1.0, "y": 2.0});
+//! assert!(definition.validate_component_data(&invalid_data).is_err());
+//! ```
+
 use std::collections::HashMap;
 
 use axum::Router;
@@ -17,10 +90,53 @@ use crate::{
 
 ///////////////////////////////////////////// Component ////////////////////////////////////////////
 
+/// A component type identifier that follows Rust naming conventions.
+///
+/// Components represent typed data that can be attached to entities. The component
+/// type identifier must be a valid Rust type path, supporting both simple names
+/// and module-qualified paths.
+///
+/// # Examples
+///
+/// ```rust
+/// use stigmergy::Component;
+///
+/// // Simple component names
+/// let health = Component::new("Health").unwrap();
+/// let position = Component::new("Position").unwrap();
+///
+/// // Module-qualified component names
+/// let issue = Component::new("ghai::Issue").unwrap();
+/// let hashmap = Component::new("std::collections::HashMap").unwrap();
+///
+/// // Invalid names return None
+/// assert!(Component::new("123Invalid").is_none());
+/// assert!(Component::new("").is_none());
+/// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Component(String);
 
 impl Component {
+    /// Creates a new Component with the given type identifier.
+    ///
+    /// The identifier must be a valid Rust type path consisting of valid identifiers
+    /// separated by `::`. Each identifier must start with a letter or underscore
+    /// and contain only alphanumeric characters and underscores.
+    ///
+    /// # Arguments
+    /// * `c` - A string-like type that can be converted to a component identifier
+    ///
+    /// # Returns
+    /// * `Some(Component)` - If the identifier is valid
+    /// * `None` - If the identifier is invalid
+    ///
+    /// # Examples
+    /// ```rust
+    /// # use stigmergy::Component;
+    /// assert!(Component::new("Position").is_some());
+    /// assert!(Component::new("ghai::Issue").is_some());
+    /// assert!(Component::new("123Invalid").is_none());
+    /// ```
     pub fn new(c: impl Into<String>) -> Option<Component> {
         let s = c.into();
         if is_valid_rust_type_path(&s) {
@@ -30,30 +146,75 @@ impl Component {
         }
     }
 
+    /// Returns the component type identifier as a string slice.
+    ///
+    /// # Examples
+    /// ```rust
+    /// # use stigmergy::Component;
+    /// let component = Component::new("Position").unwrap();
+    /// assert_eq!(component.as_str(), "Position");
+    /// ```
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
+/// Request structure for creating a new component instance.
+///
+/// This structure is used when attaching component data to an entity via HTTP API.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CreateComponentRequest {
+    /// The component type identifier
     pub component: Component,
+    /// The component data (must validate against the component's schema)
     pub data: Value,
 }
 
+/// Response structure for successful component creation.
+///
+/// Contains the entity that the component was attached to, along with the
+/// component type and data that was stored.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CreateComponentResponse {
+    /// The entity that owns this component
     pub entity: Entity,
+    /// The component type identifier
     pub component: Component,
+    /// The component data that was stored
     pub data: Value,
 }
 
+/// A component instance item used in list responses.
+///
+/// Represents a single component attached to an entity, containing both
+/// the component type and its associated data.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ComponentListItem {
+    /// The component type identifier
     pub component: Component,
+    /// The component data
     pub data: Value,
 }
 
+/// Validates that a string is a valid Rust identifier.
+///
+/// A valid Rust identifier must:
+/// - Be non-empty
+/// - Start with a letter (a-z, A-Z) or underscore
+/// - Contain only letters, digits, or underscores
+///
+/// # Examples
+/// ```rust
+/// # use stigmergy::Component;
+/// // Valid identifiers
+/// assert!(Component::new("foo").is_some());
+/// assert!(Component::new("_bar").is_some());
+/// assert!(Component::new("baz123").is_some());
+///
+/// // Invalid identifiers
+/// assert!(Component::new("123foo").is_none());
+/// assert!(Component::new("foo-bar").is_none());
+/// ```
 fn is_valid_rust_identifier(s: &str) -> bool {
     if s.is_empty() {
         return false;
@@ -71,6 +232,24 @@ fn is_valid_rust_identifier(s: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// Validates that a string is a valid Rust type path.
+///
+/// A valid Rust type path consists of valid identifiers separated by `::`.
+/// This supports both simple names and module-qualified paths.
+///
+/// # Examples
+/// ```rust
+/// # use stigmergy::Component;
+/// // Valid type paths
+/// assert!(Component::new("String").is_some());
+/// assert!(Component::new("std::collections::HashMap").is_some());
+/// assert!(Component::new("ghai::Issue").is_some());
+///
+/// // Invalid type paths
+/// assert!(Component::new("").is_none());
+/// assert!(Component::new("::").is_none());
+/// assert!(Component::new("foo::").is_none());
+/// ```
 fn is_valid_rust_type_path(s: &str) -> bool {
     if s.is_empty() {
         return false;
@@ -87,26 +266,149 @@ fn is_valid_rust_type_path(s: &str) -> bool {
 
 //////////////////////////////////////// ComponentDefinition ///////////////////////////////////////
 
+/// A component definition that associates a component type with its JSON schema.
+///
+/// Component definitions establish the structure and validation rules for component data.
+/// Each definition consists of a component type identifier and a JSON schema that
+/// describes what data is valid for that component type.
+///
+/// # Examples
+///
+/// ```rust
+/// use stigmergy::{Component, ComponentDefinition};
+/// use serde_json::json;
+///
+/// // Create a simple component definition
+/// let health_component = Component::new("Health").unwrap();
+/// let health_schema = json!({
+///     "type": "object",
+///     "properties": {
+///         "hp": { "type": "integer", "minimum": 0 },
+///         "max_hp": { "type": "integer", "minimum": 1 }
+///     },
+///     "required": ["hp", "max_hp"]
+/// });
+///
+/// let definition = ComponentDefinition::new(health_component, health_schema);
+///
+/// // Validate the schema structure
+/// assert!(definition.validate_schema().is_ok());
+///
+/// // Validate component data against the schema
+/// let valid_data = json!({"hp": 100, "max_hp": 100});
+/// assert!(definition.validate_component_data(&valid_data).is_ok());
+/// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ComponentDefinition {
+    /// The component type this definition applies to
     pub component: Component,
+    /// The JSON schema that validates component data
     pub schema: serde_json::Value,
 }
 
 impl ComponentDefinition {
+    /// Creates a new component definition.
+    ///
+    /// # Arguments
+    /// * `component` - The component type identifier
+    /// * `schema` - The JSON schema for validating component data
+    ///
+    /// # Examples
+    /// ```rust
+    /// # use stigmergy::{Component, ComponentDefinition};
+    /// # use serde_json::json;
+    /// let component = Component::new("Position").unwrap();
+    /// let schema = json!({"type": "object", "properties": {"x": {"type": "number"}}});
+    /// let definition = ComponentDefinition::new(component, schema);
+    /// ```
     pub fn new(component: Component, schema: Value) -> Self {
         Self { component, schema }
     }
 
+    /// Validates that the schema structure is well-formed.
+    ///
+    /// This method checks that the JSON schema follows the expected format and
+    /// contains valid schema constructs. It validates the schema structure
+    /// recursively to ensure all nested schemas are also valid.
+    ///
+    /// # Returns
+    /// * `Ok(())` - If the schema is valid
+    /// * `Err(ValidationError)` - If the schema structure is invalid
+    ///
+    /// # Examples
+    /// ```rust
+    /// # use stigmergy::{Component, ComponentDefinition};
+    /// # use serde_json::json;
+    /// let component = Component::new("Test").unwrap();
+    ///
+    /// // Valid schema
+    /// let valid_schema = json!({"type": "string"});
+    /// let definition = ComponentDefinition::new(component.clone(), valid_schema);
+    /// assert!(definition.validate_schema().is_ok());
+    ///
+    /// // Invalid schema (unknown type)
+    /// let invalid_schema = json!({"type": "invalid_type"});
+    /// let definition = ComponentDefinition::new(component, invalid_schema);
+    /// assert!(definition.validate_schema().is_err());
+    /// ```
     pub fn validate_schema(&self) -> Result<(), ValidationError> {
         validate_schema_structure(&self.schema)
     }
 
+    /// Validates component data against this definition's schema.
+    ///
+    /// This method checks that the provided data conforms to the JSON schema
+    /// defined for this component type. It performs comprehensive validation
+    /// including type checking, required fields, and nested structure validation.
+    ///
+    /// # Arguments
+    /// * `data` - The component data to validate
+    ///
+    /// # Returns
+    /// * `Ok(())` - If the data is valid according to the schema
+    /// * `Err(ValidationError)` - If the data doesn't match the schema
+    ///
+    /// # Examples
+    /// ```rust
+    /// # use stigmergy::{Component, ComponentDefinition};
+    /// # use serde_json::json;
+    /// let component = Component::new("Health").unwrap();
+    /// let schema = json!({
+    ///     "type": "object",
+    ///     "properties": {"hp": {"type": "integer"}},
+    ///     "required": ["hp"]
+    /// });
+    /// let definition = ComponentDefinition::new(component, schema);
+    ///
+    /// // Valid data
+    /// assert!(definition.validate_component_data(&json!({"hp": 100})).is_ok());
+    ///
+    /// // Invalid data (wrong type)
+    /// assert!(definition.validate_component_data(&json!({"hp": "high"})).is_err());
+    ///
+    /// // Invalid data (missing required field)
+    /// assert!(definition.validate_component_data(&json!({})).is_err());
+    /// ```
     pub fn validate_component_data(&self, data: &Value) -> Result<(), ValidationError> {
         validate_value(data, &self.schema)
     }
 }
 
+/// Validates the structure of a JSON schema to ensure it's well-formed.
+///
+/// This function recursively validates JSON schema objects to ensure they follow
+/// the expected format and contain valid schema constructs. It supports:
+/// - Basic types (null, boolean, integer, number, string)
+/// - Complex types (array, object)
+/// - Union types via oneOf
+/// - Nested schemas and recursive validation
+///
+/// # Arguments
+/// * `schema` - The JSON schema value to validate
+///
+/// # Returns
+/// * `Ok(())` - If the schema structure is valid
+/// * `Err(ValidationError::InvalidSchema)` - If the schema structure is malformed
 fn validate_schema_structure(schema: &Value) -> Result<(), ValidationError> {
     if !schema.is_object() {
         return Err(ValidationError::InvalidSchema(
@@ -985,6 +1287,47 @@ async fn delete_component_by_id_for_entity(
 
 ////////////////////////////////////////////// router //////////////////////////////////////////////
 
+/// Creates an HTTP router for component operations.
+///
+/// This function sets up all the HTTP endpoints for managing component definitions
+/// and component instances. The router includes routes for creating, reading,
+/// updating, and deleting both component definitions and component instances.
+///
+/// # Arguments
+/// * `logger` - Shared savefile manager for operation logging
+/// * `data_store` - Shared data store for component storage
+///
+/// # Returns
+/// An Axum Router configured with all component-related endpoints
+///
+/// # Endpoints Created
+/// - `POST /component-definition` - Create component definition
+/// - `GET /component-definition/:id` - Get component definition
+/// - `PUT /component-definition/:id` - Update component definition
+/// - `PATCH /component-definition/:id` - Patch component definition
+/// - `DELETE /component-definition/:id` - Delete component definition
+/// - `DELETE /component-definition` - Delete all component definitions
+/// - `GET /component-definition` - List component definitions
+/// - `POST /entity/:entity_base64/component` - Create component instance
+/// - `GET /entity/:entity_base64/component/:component_id` - Get component instance
+/// - `PUT /entity/:entity_base64/component/:component_id` - Update component instance
+/// - `PATCH /entity/:entity_base64/component/:component_id` - Patch component instance
+/// - `DELETE /entity/:entity_base64/component/:component_id` - Delete component instance
+/// - `DELETE /entity/:entity_base64/component` - Delete all components for entity
+/// - `GET /entity/:entity_base64/component` - List components for entity
+/// - `GET /component` - List all component instances
+///
+/// # Examples
+/// ```rust
+/// use stigmergy::{create_component_router, SavefileManager, InMemoryDataStore};
+/// use std::sync::Arc;
+/// use std::path::PathBuf;
+///
+/// let logger = Arc::new(SavefileManager::new(PathBuf::from("test.jsonl")));
+/// let store = Arc::new(InMemoryDataStore::new());
+/// let router = create_component_router(logger, store);
+/// // Router can be used with an Axum server
+/// ```
 pub fn create_component_router(
     logger: Arc<SavefileManager>,
     data_store: Arc<dyn DataStore>,
