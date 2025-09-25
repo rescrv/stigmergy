@@ -1997,7 +1997,7 @@ mod tests {
 
         let data_store = test_data_store();
         let entity = Entity::random().unwrap();
-        let entity_id = entity.to_string()[7..].to_string(); // Skip "entity:" prefix
+        let entity_id = entity.base64_part();
         let result = get_components_for_entity(
             State((logger, data_store)),
             Path(entity_id),
@@ -2050,7 +2050,7 @@ mod tests {
 
         let result = create_component_for_entity(
             State((logger, data_store)),
-            Path(entity.to_string()[7..].to_string()),
+            Path(entity.base64_part()),
             Json(request),
         )
         .await;
@@ -2098,7 +2098,7 @@ mod tests {
 
         let result = create_component_for_entity(
             State((logger, test_data_store())),
-            Path(entity.to_string()[7..].to_string()),
+            Path(entity.base64_part()),
             Json(request),
         )
         .await;
@@ -2138,7 +2138,7 @@ mod tests {
         clear_savefile(&log_path);
 
         let entity = Entity::random().unwrap();
-        let entity_id = entity.to_string()[7..].to_string(); // Skip "entity:" prefix
+        let entity_id = entity.base64_part();
         let component_data = serde_json::json!({"color": "blue"});
         let logs_before = load_entries(&log_path);
         assert!(logs_before.is_empty());
@@ -2183,7 +2183,7 @@ mod tests {
         clear_savefile(&log_path);
 
         let entity = Entity::random().unwrap();
-        let entity_id = entity.to_string()[7..].to_string(); // Skip "entity:" prefix
+        let entity_id = entity.base64_part();
         let patch_data = serde_json::json!({"size": "large"});
         let logs_before = load_entries(&log_path);
         assert!(logs_before.is_empty());
@@ -2227,7 +2227,7 @@ mod tests {
         clear_savefile(&log_path);
 
         let entity = Entity::random().unwrap();
-        let entity_id = entity.to_string()[7..].to_string(); // Skip "entity:" prefix
+        let entity_id = entity.base64_part();
         let logs_before = load_entries(&log_path);
         assert!(logs_before.is_empty());
 
@@ -2259,7 +2259,7 @@ mod tests {
         clear_savefile(&log_path);
 
         let entity = Entity::random().unwrap();
-        let entity_id = entity.to_string()[7..].to_string(); // Skip "entity:" prefix
+        let entity_id = entity.base64_part();
         let test_id = "comp123".to_string();
         let logs_before = load_entries(&log_path);
         assert!(logs_before.is_empty());
@@ -2300,7 +2300,7 @@ mod tests {
         clear_savefile(&log_path);
 
         let entity = Entity::random().unwrap();
-        let entity_id = entity.to_string()[7..].to_string(); // Skip "entity:" prefix
+        let entity_id = entity.base64_part();
         let test_id = "comp456".to_string();
         let component_data = serde_json::json!({"status": "active"});
         let logs_before = load_entries(&log_path);
@@ -2347,7 +2347,7 @@ mod tests {
         clear_savefile(&log_path);
 
         let entity = Entity::random().unwrap();
-        let entity_id = entity.to_string()[7..].to_string(); // Skip "entity:" prefix
+        let entity_id = entity.base64_part();
         let test_id = "comp789".to_string();
         let patch_data = serde_json::json!({"priority": "high"});
         let logs_before = load_entries(&log_path);
@@ -2399,7 +2399,7 @@ mod tests {
         clear_savefile(&log_path);
 
         let entity = Entity::random().unwrap();
-        let entity_id = entity.to_string()[7..].to_string(); // Skip "entity:" prefix
+        let entity_id = entity.base64_part();
         let test_id = "comp_delete".to_string();
         let logs_before = load_entries(&log_path);
         assert!(logs_before.is_empty());
@@ -2495,7 +2495,7 @@ mod tests {
 
         let result = create_component_for_entity(
             State((logger.clone(), data_store.clone())),
-            Path(entity.to_string()[7..].to_string()),
+            Path(entity.base64_part()),
             Json(request),
         )
         .await;
@@ -2572,7 +2572,7 @@ mod tests {
 
         // Create an entity to attach the component to
         let entity = Entity::random().unwrap();
-        let entity_id = entity.to_string()[7..].to_string(); // Skip "entity:" prefix
+        let entity_id = entity.base64_part();
 
         // Create the entity first
         data_store.create_entity(&entity).unwrap();

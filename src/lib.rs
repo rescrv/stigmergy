@@ -201,6 +201,12 @@ pub mod cli_utils;
 /// definitions, including schema validation and error handling.
 pub mod component_utils;
 
+/// Command-line interface command handlers.
+///
+/// This module contains organized command handlers for the stigctl CLI application,
+/// with each command type implemented in a dedicated submodule.
+pub mod commands;
+
 /// HTTP client utilities for interacting with stigmergy services.
 ///
 /// This module provides a standardized HTTP client for communicating with

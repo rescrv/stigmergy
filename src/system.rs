@@ -94,6 +94,23 @@ impl SystemId {
             // If it contains - or _, continue the loop to generate a new one
         }
     }
+
+    /// Returns the base64 portion of the system identifier for URL construction.
+    ///
+    /// This method extracts just the base64-encoded part without the "system:" prefix,
+    /// which is useful for constructing API URLs that expect only the identifier part.
+    ///
+    /// # Examples
+    /// ```
+    /// # use stigmergy::{SystemId};
+    /// let system_id = SystemId::new([1u8; 32]);
+    /// let base64_part = system_id.base64_part();
+    /// assert_eq!(base64_part.len(), 43); // Base64 encoding of 32 bytes is 43 chars
+    /// assert!(!base64_part.contains("system:"));
+    /// ```
+    pub fn base64_part(&self) -> String {
+        encode_base64_url_safe(&self.0)
+    }
 }
 
 ////////////////////////////////////// URL-Safe Base64 Encoding //////////////////////////////////////
@@ -221,10 +238,11 @@ pub enum SystemIdParseError {
 impl Display for SystemIdParseError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
-            SystemIdParseError::InvalidPrefix => {
-                write!(f, "System string must start with 'system:'")
-            }
-            SystemIdParseError::InvalidFormat => write!(f, "Invalid system format"),
+            SystemIdParseError::InvalidPrefix => write!(f, "Invalid system prefix"),
+            SystemIdParseError::InvalidFormat => write!(
+                f,
+                "Invalid system format - expected 43-character base64 string"
+            ),
             SystemIdParseError::InvalidBase64 => write!(f, "Invalid base64 encoding"),
             SystemIdParseError::InvalidLength => write!(f, "System must be exactly 32 bytes"),
         }
@@ -237,11 +255,16 @@ impl FromStr for SystemId {
     type Err = SystemIdParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if !s.starts_with(SYSTEM_PREFIX) {
+        let base64_part = if let Some(base64) = s.strip_prefix(SYSTEM_PREFIX) {
+            // Has "system:" prefix, use the part after it
+            base64
+        } else if s.contains(':') {
+            // Has some other prefix - this is invalid
             return Err(SystemIdParseError::InvalidPrefix);
-        }
-
-        let base64_part = &s[SYSTEM_PREFIX_LEN..]; // Skip "system:"
+        } else {
+            // No prefix, assume it's already the base64 part
+            s
+        };
 
         if base64_part.len() != BASE64_ENCODED_LEN {
             return Err(SystemIdParseError::InvalidFormat);
@@ -1054,6 +1077,41 @@ mod tests {
     fn system_id_from_str_invalid_prefix() {
         let result = SystemId::from_str("invalid:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
         assert_eq!(result, Err(SystemIdParseError::InvalidPrefix));
+    }
+
+    #[test]
+    fn system_id_from_str_without_prefix() {
+        let base64_str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let system_id = SystemId::from_str(base64_str).unwrap();
+        assert_eq!(system_id.as_bytes(), &[0u8; 32]);
+    }
+
+    #[test]
+    fn system_id_from_str_with_and_without_prefix_equivalent() {
+        let base64_str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let with_prefix_str = "system:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+        let system_id1 = SystemId::from_str(base64_str).unwrap();
+        let system_id2 = SystemId::from_str(with_prefix_str).unwrap();
+
+        assert_eq!(system_id1, system_id2);
+        assert_eq!(system_id1.as_bytes(), system_id2.as_bytes());
+    }
+
+    #[test]
+    fn system_id_base64_part_method() {
+        let system_id = SystemId::new([1u8; 32]);
+        let base64_part = system_id.base64_part();
+
+        // Should be 43 characters (base64 encoding of 32 bytes without padding)
+        assert_eq!(base64_part.len(), 43);
+
+        // Should not contain the prefix
+        assert!(!base64_part.contains("system:"));
+
+        // Should be able to parse back using the base64 part only
+        let parsed = SystemId::from_str(&base64_part).unwrap();
+        assert_eq!(parsed, system_id);
     }
 
     #[test]

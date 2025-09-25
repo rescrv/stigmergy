@@ -191,6 +191,23 @@ impl Entity {
             // If it contains - or _, continue the loop to generate a new one
         }
     }
+
+    /// Returns the base64 portion of the entity identifier for URL construction.
+    ///
+    /// This method extracts just the base64-encoded part without the "entity:" prefix,
+    /// which is useful for constructing API URLs that expect only the identifier part.
+    ///
+    /// # Examples
+    /// ```
+    /// # use stigmergy::Entity;
+    /// let entity = Entity::new([1u8; 32]);
+    /// let base64_part = entity.base64_part();
+    /// assert_eq!(base64_part.len(), 43); // Base64 encoding of 32 bytes is 43 chars
+    /// assert!(!base64_part.contains("entity:"));
+    /// ```
+    pub fn base64_part(&self) -> String {
+        encode_base64_url_safe(&self.0)
+    }
 }
 
 ////////////////////////////////////// URL-Safe Base64 Encoding //////////////////////////////////////
@@ -357,8 +374,11 @@ pub enum EntityParseError {
 impl Display for EntityParseError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
-            EntityParseError::InvalidPrefix => write!(f, "Entity string must start with 'entity:'"),
-            EntityParseError::InvalidFormat => write!(f, "Invalid entity format"),
+            EntityParseError::InvalidPrefix => write!(f, "Invalid entity prefix"),
+            EntityParseError::InvalidFormat => write!(
+                f,
+                "Invalid entity format - expected 43-character base64 string"
+            ),
             EntityParseError::InvalidBase64 => write!(f, "Invalid base64 encoding"),
             EntityParseError::InvalidLength => write!(f, "Entity must be exactly 32 bytes"),
         }
@@ -372,7 +392,9 @@ impl FromStr for Entity {
 
     /// Parses an Entity from its string representation.
     ///
-    /// Expected format: "entity:{base64}" where base64 is 43 characters of URL-safe base64.
+    /// Accepts either format:
+    /// - "entity:{base64}" - full format with prefix
+    /// - "{base64}" - base64 only (43 characters of URL-safe base64)
     ///
     /// # Arguments
     /// * `s` - The string to parse
@@ -384,14 +406,21 @@ impl FromStr for Entity {
     /// # Examples
     /// ```
     /// # use stigmergy::Entity;
-    /// let entity: Entity = "entity:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".parse().unwrap();
+    /// let entity1: Entity = "entity:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".parse().unwrap();
+    /// let entity2: Entity = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".parse().unwrap();
+    /// assert_eq!(entity1, entity2);
     /// ```
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if !s.starts_with(ENTITY_PREFIX) {
+        let base64_part = if let Some(base64) = s.strip_prefix(ENTITY_PREFIX) {
+            // Has "entity:" prefix, use the part after it
+            base64
+        } else if s.contains(':') {
+            // Has some other prefix - this is invalid
             return Err(EntityParseError::InvalidPrefix);
-        }
-
-        let base64_part = &s[ENTITY_PREFIX_LEN..]; // Skip "entity:"
+        } else {
+            // No prefix, assume it's already the base64 part
+            s
+        };
 
         if base64_part.len() != BASE64_ENCODED_LEN {
             return Err(EntityParseError::InvalidFormat);
@@ -850,6 +879,41 @@ mod tests {
         for c in base64_part.chars() {
             assert!(c.is_ascii_alphanumeric() || c == '-' || c == '_');
         }
+    }
+
+    #[test]
+    fn entity_from_str_without_prefix() {
+        let base64_str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let entity = Entity::from_str(base64_str).unwrap();
+        assert_eq!(entity.as_bytes(), &[0u8; 32]);
+    }
+
+    #[test]
+    fn entity_from_str_with_and_without_prefix_equivalent() {
+        let base64_str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let with_prefix_str = "entity:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+        let entity1 = Entity::from_str(base64_str).unwrap();
+        let entity2 = Entity::from_str(with_prefix_str).unwrap();
+
+        assert_eq!(entity1, entity2);
+        assert_eq!(entity1.as_bytes(), entity2.as_bytes());
+    }
+
+    #[test]
+    fn entity_base64_part_method() {
+        let entity = Entity::new([1u8; 32]);
+        let base64_part = entity.base64_part();
+
+        // Should be 43 characters (base64 encoding of 32 bytes without padding)
+        assert_eq!(base64_part.len(), 43);
+
+        // Should not contain the prefix
+        assert!(!base64_part.contains("entity:"));
+
+        // Should be able to parse back using the base64 part only
+        let parsed = Entity::from_str(&base64_part).unwrap();
+        assert_eq!(parsed, entity);
     }
 
     #[test]
