@@ -31,6 +31,8 @@
 use handled::Handle;
 use std::fmt;
 
+mod evaluate;
+
 /// Position information for error reporting
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Position {
