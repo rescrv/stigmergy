@@ -176,6 +176,7 @@
 //! ```
 
 #![deny(missing_docs)]
+mod bid;
 mod component;
 mod data_operations;
 mod data_store;
@@ -213,6 +214,7 @@ pub mod commands;
 /// stigmergy HTTP APIs, handling requests, responses, and error conditions.
 pub mod http_utils;
 
+pub use bid::{Bid, BidParseError, BidParser, BinaryOperator, Expression, Position, UnaryOperator};
 pub use component::{
     Component, ComponentDefinition, ComponentListItem, CreateComponentRequest,
     CreateComponentResponse, create_component_router,
