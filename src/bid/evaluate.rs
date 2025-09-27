@@ -251,6 +251,95 @@ fn are_both_integers(left: &Value, right: &Value) -> Result<bool, EvaluationErro
     Ok(is_integer(left)? && is_integer(right)?)
 }
 
+/// Check for division by zero
+fn check_division_by_zero(divisor: f64) -> Result<(), EvaluationError> {
+    if divisor == 0.0 {
+        Err(EvaluationError::DivisionByZero)
+    } else {
+        Ok(())
+    }
+}
+
+/// Perform a generic arithmetic operation between two numeric JSON values
+fn perform_arithmetic_operation<F>(
+    left: &Value,
+    right: &Value,
+    op: F,
+    op_name: &str,
+) -> Result<Value, EvaluationError>
+where
+    F: Fn(f64, f64) -> f64,
+{
+    let l_val = extract_number(left)?;
+    let r_val = extract_number(right)?;
+    let result = op(l_val, r_val);
+
+    if let Some(num) = serde_json::Number::from_f64(result) {
+        Ok(Value::Number(num))
+    } else {
+        Err(EvaluationError::InvalidOperation {
+            message: format!("{} result overflow: {}", op_name, result),
+        })
+    }
+}
+
+fn perform_arithmetic_operation_with_options<F>(
+    left: &Value,
+    right: &Value,
+    op: F,
+    op_name: &str,
+    check_div_by_zero: bool,
+    preserve_integer_types: bool,
+) -> Result<Value, EvaluationError>
+where
+    F: Fn(f64, f64) -> f64,
+{
+    let l_val = extract_number(left)?;
+    let r_val = extract_number(right)?;
+
+    if check_div_by_zero {
+        check_division_by_zero(r_val)?;
+    }
+
+    let result = op(l_val, r_val);
+
+    if preserve_integer_types
+        && are_both_integers(left, right)?
+        && result.fract().abs() <= f64::EPSILON
+    {
+        Ok(Value::Number(serde_json::Number::from(result as i64)))
+    } else if let Some(num) = serde_json::Number::from_f64(result) {
+        Ok(Value::Number(num))
+    } else {
+        Err(EvaluationError::InvalidOperation {
+            message: format!("{} result overflow: {}", op_name, result),
+        })
+    }
+}
+
+fn perform_unary_operation<F>(
+    value: &Value,
+    op: F,
+    op_name: &str,
+    preserve_integer_types: bool,
+) -> Result<Value, EvaluationError>
+where
+    F: Fn(f64) -> f64,
+{
+    let num_val = extract_number(value)?;
+    let result = op(num_val);
+
+    if preserve_integer_types && is_integer(value)? && result.fract().abs() <= f64::EPSILON {
+        Ok(Value::Number(serde_json::Number::from(result as i64)))
+    } else if let Some(num) = serde_json::Number::from_f64(result) {
+        Ok(Value::Number(num))
+    } else {
+        Err(EvaluationError::InvalidOperation {
+            message: format!("{} result overflow: {}", op_name, result),
+        })
+    }
+}
+
 /// Add two JSON values
 fn add_values(left: &Value, right: &Value) -> Result<Value, EvaluationError> {
     match (left, right) {
@@ -279,75 +368,36 @@ fn add_values(left: &Value, right: &Value) -> Result<Value, EvaluationError> {
 
 /// Subtract two numeric JSON values
 fn subtract_values(left: &Value, right: &Value) -> Result<Value, EvaluationError> {
-    let l_val = extract_number(left)?;
-    let r_val = extract_number(right)?;
-    let result = l_val - r_val;
-
-    if let Some(num) = serde_json::Number::from_f64(result) {
-        Ok(Value::Number(num))
-    } else {
-        Err(EvaluationError::InvalidOperation {
-            message: format!("Subtraction result overflow: {}", result),
-        })
-    }
+    perform_arithmetic_operation(left, right, |lhs, rhs| lhs - rhs, "Subtraction")
 }
 
 /// Multiply two numeric JSON values
 fn multiply_values(left: &Value, right: &Value) -> Result<Value, EvaluationError> {
-    let l_val = extract_number(left)?;
-    let r_val = extract_number(right)?;
-    let result = l_val * r_val;
-
-    if let Some(num) = serde_json::Number::from_f64(result) {
-        Ok(Value::Number(num))
-    } else {
-        Err(EvaluationError::InvalidOperation {
-            message: format!("Multiplication result overflow: {}", result),
-        })
-    }
+    perform_arithmetic_operation(left, right, |lhs, rhs| lhs * rhs, "Multiplication")
 }
 
 /// Divide two numeric JSON values
 fn divide_values(left: &Value, right: &Value) -> Result<Value, EvaluationError> {
-    let l_val = extract_number(left)?;
-    let r_val = extract_number(right)?;
-
-    if r_val == 0.0 {
-        return Err(EvaluationError::DivisionByZero);
-    }
-
-    let result = l_val / r_val;
-
-    if let Some(num) = serde_json::Number::from_f64(result) {
-        Ok(Value::Number(num))
-    } else {
-        Err(EvaluationError::InvalidOperation {
-            message: format!("Division result overflow: {}", result),
-        })
-    }
+    perform_arithmetic_operation_with_options(
+        left,
+        right,
+        |lhs, rhs| lhs / rhs,
+        "Division",
+        true,
+        false,
+    )
 }
 
 /// Calculate modulo of two numeric JSON values
 fn modulo_values(left: &Value, right: &Value) -> Result<Value, EvaluationError> {
-    let l_val = extract_number(left)?;
-    let r_val = extract_number(right)?;
-
-    if r_val == 0.0 {
-        return Err(EvaluationError::DivisionByZero);
-    }
-
-    let result = l_val % r_val;
-
-    // If both inputs are integers and result is a whole number, create an integer
-    if are_both_integers(left, right)? && result.fract().abs() <= f64::EPSILON {
-        Ok(Value::Number(serde_json::Number::from(result as i64)))
-    } else if let Some(num) = serde_json::Number::from_f64(result) {
-        Ok(Value::Number(num))
-    } else {
-        Err(EvaluationError::InvalidOperation {
-            message: format!("Modulo result overflow: {}", result),
-        })
-    }
+    perform_arithmetic_operation_with_options(
+        left,
+        right,
+        |lhs, rhs| lhs % rhs,
+        "Modulo",
+        true,
+        true,
+    )
 }
 
 /// Calculate power of two numeric JSON values
@@ -376,19 +426,7 @@ fn power_values(left: &Value, right: &Value) -> Result<Value, EvaluationError> {
 
 /// Negate a numeric JSON value
 fn negate_value(value: &Value) -> Result<Value, EvaluationError> {
-    let num_val = extract_number(value)?;
-    let result = -num_val;
-
-    // If input is integer and result is a whole number, create an integer
-    if is_integer(value)? && result.fract().abs() <= f64::EPSILON {
-        Ok(Value::Number(serde_json::Number::from(result as i64)))
-    } else if let Some(num) = serde_json::Number::from_f64(result) {
-        Ok(Value::Number(num))
-    } else {
-        Err(EvaluationError::InvalidOperation {
-            message: format!("Negation result overflow: {}", result),
-        })
-    }
+    perform_unary_operation(value, |val| -val, "Negation", true)
 }
 
 /// Get a string representation of a JSON value's type

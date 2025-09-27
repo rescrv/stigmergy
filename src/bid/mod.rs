@@ -935,57 +935,23 @@ impl<'a> Parser<'a> {
         self.parse_logical_or()
     }
 
-    fn parse_logical_or(&mut self) -> Result<Expression, BidParseError> {
-        let mut left = self.parse_logical_and()?;
+    fn parse_binary_left_associative<F, G>(
+        &mut self,
+        mut next_level: F,
+        token_matcher: G,
+        operator_mapper: fn(&TokenType) -> BinaryOperator,
+    ) -> Result<Expression, BidParseError>
+    where
+        F: FnMut(&mut Self) -> Result<Expression, BidParseError>,
+        G: Fn(&TokenType) -> bool,
+    {
+        let mut left = next_level(self)?;
 
-        while matches!(self.current_token.token_type, TokenType::LogicalOr) {
+        while token_matcher(&self.current_token.token_type) {
             let position = self.current_token.position;
+            let operator = operator_mapper(&self.current_token.token_type);
             self.advance()?;
-            let right = self.parse_logical_and()?;
-            left = Expression::BinaryOperation {
-                left: Box::new(left),
-                operator: BinaryOperator::LogicalOr,
-                right: Box::new(right),
-                position,
-            };
-        }
-
-        Ok(left)
-    }
-
-    fn parse_logical_and(&mut self) -> Result<Expression, BidParseError> {
-        let mut left = self.parse_equality()?;
-
-        while matches!(self.current_token.token_type, TokenType::LogicalAnd) {
-            let position = self.current_token.position;
-            self.advance()?;
-            let right = self.parse_equality()?;
-            left = Expression::BinaryOperation {
-                left: Box::new(left),
-                operator: BinaryOperator::LogicalAnd,
-                right: Box::new(right),
-                position,
-            };
-        }
-
-        Ok(left)
-    }
-
-    fn parse_equality(&mut self) -> Result<Expression, BidParseError> {
-        let mut left = self.parse_comparison()?;
-
-        while let TokenType::Equal | TokenType::NotEqual | TokenType::RegexMatch =
-            self.current_token.token_type
-        {
-            let position = self.current_token.position;
-            let operator = match self.current_token.token_type {
-                TokenType::Equal => BinaryOperator::Equal,
-                TokenType::NotEqual => BinaryOperator::NotEqual,
-                TokenType::RegexMatch => BinaryOperator::RegexMatch,
-                _ => unreachable!(),
-            };
-            self.advance()?;
-            let right = self.parse_comparison()?;
+            let right = next_level(self)?;
             left = Expression::BinaryOperation {
                 left: Box::new(left),
                 operator,
@@ -997,82 +963,90 @@ impl<'a> Parser<'a> {
         Ok(left)
     }
 
-    fn parse_comparison(&mut self) -> Result<Expression, BidParseError> {
-        let mut left = self.parse_addition()?;
+    fn parse_logical_or(&mut self) -> Result<Expression, BidParseError> {
+        self.parse_binary_left_associative(
+            |parser| parser.parse_logical_and(),
+            |token| matches!(token, TokenType::LogicalOr),
+            |_| BinaryOperator::LogicalOr,
+        )
+    }
 
-        while let TokenType::LessThan
-        | TokenType::LessThanOrEqual
-        | TokenType::GreaterThan
-        | TokenType::GreaterThanOrEqual = self.current_token.token_type
-        {
-            let position = self.current_token.position;
-            let operator = match self.current_token.token_type {
+    fn parse_logical_and(&mut self) -> Result<Expression, BidParseError> {
+        self.parse_binary_left_associative(
+            |parser| parser.parse_equality(),
+            |token| matches!(token, TokenType::LogicalAnd),
+            |_| BinaryOperator::LogicalAnd,
+        )
+    }
+
+    fn parse_equality(&mut self) -> Result<Expression, BidParseError> {
+        self.parse_binary_left_associative(
+            |parser| parser.parse_comparison(),
+            |token| {
+                matches!(
+                    token,
+                    TokenType::Equal | TokenType::NotEqual | TokenType::RegexMatch
+                )
+            },
+            |token| match token {
+                TokenType::Equal => BinaryOperator::Equal,
+                TokenType::NotEqual => BinaryOperator::NotEqual,
+                TokenType::RegexMatch => BinaryOperator::RegexMatch,
+                _ => unreachable!(),
+            },
+        )
+    }
+
+    fn parse_comparison(&mut self) -> Result<Expression, BidParseError> {
+        self.parse_binary_left_associative(
+            |parser| parser.parse_addition(),
+            |token| {
+                matches!(
+                    token,
+                    TokenType::LessThan
+                        | TokenType::LessThanOrEqual
+                        | TokenType::GreaterThan
+                        | TokenType::GreaterThanOrEqual
+                )
+            },
+            |token| match token {
                 TokenType::LessThan => BinaryOperator::LessThan,
                 TokenType::LessThanOrEqual => BinaryOperator::LessThanOrEqual,
                 TokenType::GreaterThan => BinaryOperator::GreaterThan,
                 TokenType::GreaterThanOrEqual => BinaryOperator::GreaterThanOrEqual,
                 _ => unreachable!(),
-            };
-            self.advance()?;
-            let right = self.parse_addition()?;
-            left = Expression::BinaryOperation {
-                left: Box::new(left),
-                operator,
-                right: Box::new(right),
-                position,
-            };
-        }
-
-        Ok(left)
+            },
+        )
     }
 
     fn parse_addition(&mut self) -> Result<Expression, BidParseError> {
-        let mut left = self.parse_multiplication()?;
-
-        while let TokenType::Plus | TokenType::Minus = self.current_token.token_type {
-            let position = self.current_token.position;
-            let operator = match self.current_token.token_type {
+        self.parse_binary_left_associative(
+            |parser| parser.parse_multiplication(),
+            |token| matches!(token, TokenType::Plus | TokenType::Minus),
+            |token| match token {
                 TokenType::Plus => BinaryOperator::Add,
                 TokenType::Minus => BinaryOperator::Subtract,
                 _ => unreachable!(),
-            };
-            self.advance()?;
-            let right = self.parse_multiplication()?;
-            left = Expression::BinaryOperation {
-                left: Box::new(left),
-                operator,
-                right: Box::new(right),
-                position,
-            };
-        }
-
-        Ok(left)
+            },
+        )
     }
 
     fn parse_multiplication(&mut self) -> Result<Expression, BidParseError> {
-        let mut left = self.parse_power()?;
-
-        while let TokenType::Multiply | TokenType::Divide | TokenType::Modulo =
-            self.current_token.token_type
-        {
-            let position = self.current_token.position;
-            let operator = match self.current_token.token_type {
+        self.parse_binary_left_associative(
+            |parser| parser.parse_power(),
+            |token| {
+                matches!(
+                    token,
+                    TokenType::Multiply | TokenType::Divide | TokenType::Modulo
+                )
+            },
+            |token| match token {
                 TokenType::Multiply => BinaryOperator::Multiply,
                 TokenType::Divide => BinaryOperator::Divide,
                 TokenType::Modulo => BinaryOperator::Modulo,
                 _ => unreachable!(),
-            };
-            self.advance()?;
-            let right = self.parse_power()?;
-            left = Expression::BinaryOperation {
-                left: Box::new(left),
-                operator,
-                right: Box::new(right),
-                position,
-            };
-        }
-
-        Ok(left)
+            },
+        )
     }
 
     fn parse_power(&mut self) -> Result<Expression, BidParseError> {
