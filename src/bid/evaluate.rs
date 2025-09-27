@@ -236,6 +236,21 @@ fn extract_number(value: &Value) -> Result<f64, EvaluationError> {
     }
 }
 
+/// Check if a JSON value represents an integer
+fn is_integer(value: &Value) -> Result<bool, EvaluationError> {
+    match value {
+        Value::Number(n) => Ok(n.is_i64() || n.is_u64()),
+        _ => Err(EvaluationError::TypeMismatch {
+            message: format!("Expected number, found {}", type_name(value)),
+        }),
+    }
+}
+
+/// Check if both JSON values represent integers
+fn are_both_integers(left: &Value, right: &Value) -> Result<bool, EvaluationError> {
+    Ok(is_integer(left)? && is_integer(right)?)
+}
+
 /// Add two JSON values
 fn add_values(left: &Value, right: &Value) -> Result<Value, EvaluationError> {
     match (left, right) {
@@ -323,7 +338,10 @@ fn modulo_values(left: &Value, right: &Value) -> Result<Value, EvaluationError> 
 
     let result = l_val % r_val;
 
-    if let Some(num) = serde_json::Number::from_f64(result) {
+    // If both inputs are integers and result is a whole number, create an integer
+    if are_both_integers(left, right)? && result.fract().abs() <= f64::EPSILON {
+        Ok(Value::Number(serde_json::Number::from(result as i64)))
+    } else if let Some(num) = serde_json::Number::from_f64(result) {
         Ok(Value::Number(num))
     } else {
         Err(EvaluationError::InvalidOperation {
@@ -361,7 +379,10 @@ fn negate_value(value: &Value) -> Result<Value, EvaluationError> {
     let num_val = extract_number(value)?;
     let result = -num_val;
 
-    if let Some(num) = serde_json::Number::from_f64(result) {
+    // If input is integer and result is a whole number, create an integer
+    if is_integer(value)? && result.fract().abs() <= f64::EPSILON {
+        Ok(Value::Number(serde_json::Number::from(result as i64)))
+    } else if let Some(num) = serde_json::Number::from_f64(result) {
         Ok(Value::Number(num))
     } else {
         Err(EvaluationError::InvalidOperation {
