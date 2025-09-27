@@ -171,6 +171,10 @@ pub enum BinaryOperator {
     LogicalAnd,
     /// Logical OR
     LogicalOr,
+
+    // Regex operators
+    /// Regex match
+    RegexMatch,
 }
 
 impl BinaryOperator {
@@ -179,7 +183,7 @@ impl BinaryOperator {
         match self {
             BinaryOperator::LogicalOr => 1,
             BinaryOperator::LogicalAnd => 2,
-            BinaryOperator::Equal | BinaryOperator::NotEqual => 3,
+            BinaryOperator::Equal | BinaryOperator::NotEqual | BinaryOperator::RegexMatch => 3,
             BinaryOperator::LessThan
             | BinaryOperator::LessThanOrEqual
             | BinaryOperator::GreaterThan
@@ -213,6 +217,7 @@ impl fmt::Display for BinaryOperator {
             BinaryOperator::GreaterThanOrEqual => ">=",
             BinaryOperator::LogicalAnd => "&&",
             BinaryOperator::LogicalOr => "||",
+            BinaryOperator::RegexMatch => "~=",
         };
         write!(f, "{}", s)
     }
@@ -307,6 +312,7 @@ pub enum TokenType {
     LogicalAnd,
     LogicalOr,
     LogicalNot,
+    RegexMatch,
 
     // Punctuation
     Dot,
@@ -717,6 +723,21 @@ impl Lexer {
                         })
                     }
                 }
+                '~' => {
+                    self.advance();
+                    if self.current_char() == Some('=') {
+                        self.advance();
+                        Ok(Token {
+                            token_type: TokenType::RegexMatch,
+                            position,
+                        })
+                    } else {
+                        Err(BidParseError::InvalidCharacter {
+                            character: '~',
+                            position,
+                        })
+                    }
+                }
                 '"' => self.read_string_literal(position),
                 ch if ch.is_ascii_alphabetic() || ch == '_' => {
                     self.read_identifier_or_keyword(position)
@@ -953,11 +974,14 @@ impl<'a> Parser<'a> {
     fn parse_equality(&mut self) -> Result<Expression, BidParseError> {
         let mut left = self.parse_comparison()?;
 
-        while let TokenType::Equal | TokenType::NotEqual = self.current_token.token_type {
+        while let TokenType::Equal | TokenType::NotEqual | TokenType::RegexMatch =
+            self.current_token.token_type
+        {
             let position = self.current_token.position;
             let operator = match self.current_token.token_type {
                 TokenType::Equal => BinaryOperator::Equal,
                 TokenType::NotEqual => BinaryOperator::NotEqual,
+                TokenType::RegexMatch => BinaryOperator::RegexMatch,
                 _ => unreachable!(),
             };
             self.advance()?;
@@ -2378,6 +2402,63 @@ mod tests {
         {
             assert_eq!(path[0].len(), 10000);
         }
+    }
+
+    #[test]
+    fn parse_regex_match_operator() {
+        let result = BidParser::parse(r#"ON text ~= "pattern" BID value"#).unwrap();
+
+        if let Expression::BinaryOperation {
+            operator: BinaryOperator::RegexMatch,
+            left,
+            right,
+            ..
+        } = result.on_condition
+        {
+            assert!(matches!(*left, Expression::Variable { ref path, .. } if path == &["text"]));
+            assert!(
+                matches!(*right, Expression::StringLiteral { ref value, .. } if value == "pattern")
+            );
+        } else {
+            panic!("Expected regex match operation");
+        }
+    }
+
+    #[test]
+    fn regex_operator_precedence() {
+        let result = BidParser::parse(r#"ON a == b && c ~= "d" BID 1"#).unwrap();
+
+        if let Expression::BinaryOperation {
+            operator: BinaryOperator::LogicalAnd,
+            left,
+            right,
+            ..
+        } = result.on_condition
+        {
+            assert!(matches!(
+                *left,
+                Expression::BinaryOperation {
+                    operator: BinaryOperator::Equal,
+                    ..
+                }
+            ));
+            assert!(matches!(
+                *right,
+                Expression::BinaryOperation {
+                    operator: BinaryOperator::RegexMatch,
+                    ..
+                }
+            ));
+        } else {
+            panic!("Expected logical AND with regex match having correct precedence");
+        }
+    }
+
+    #[test]
+    fn regex_operator_display() {
+        let result = BidParser::parse(r#"ON text ~= "pattern" BID 42"#).unwrap();
+        let display = format!("{}", result.on_condition);
+        assert!(display.contains("~="));
     }
 
     #[test]

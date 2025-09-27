@@ -1,3 +1,4 @@
+use regex::Regex;
 use serde_json::Value;
 
 use crate::bid::{Bid, BinaryOperator, Expression, UnaryOperator};
@@ -22,6 +23,13 @@ pub enum EvaluationError {
         /// Description of the invalid operation
         message: String,
     },
+    /// Regex compilation error
+    RegexError {
+        /// The regex pattern that failed to compile
+        pattern: String,
+        /// The regex error message
+        error: String,
+    },
 }
 
 impl std::fmt::Display for EvaluationError {
@@ -38,6 +46,9 @@ impl std::fmt::Display for EvaluationError {
             }
             EvaluationError::InvalidOperation { message } => {
                 write!(f, "Invalid operation: {}", message)
+            }
+            EvaluationError::RegexError { pattern, error } => {
+                write!(f, "Regex error for pattern {pattern:?}: {error}")
             }
         }
     }
@@ -160,6 +171,9 @@ fn evaluate_binary_operation(
                 Ok(right.clone())
             }
         }
+
+        // Regex operators
+        BinaryOperator::RegexMatch => regex_match_values(left, right),
     }
 }
 
@@ -368,6 +382,46 @@ fn type_name(value: &Value) -> &'static str {
     }
 }
 
+/// Perform regex match operation
+/// Left operand (haystack) should be a string, right operand (pattern) should be a string
+fn regex_match_values(left: &Value, right: &Value) -> Result<Value, EvaluationError> {
+    let haystack = match left {
+        Value::String(s) => s,
+        _ => {
+            return Err(EvaluationError::TypeMismatch {
+                message: format!(
+                    "Regex match left operand must be a string, found {}",
+                    type_name(left)
+                ),
+            });
+        }
+    };
+
+    let pattern = match right {
+        Value::String(s) => s,
+        _ => {
+            return Err(EvaluationError::TypeMismatch {
+                message: format!(
+                    "Regex match right operand must be a string, found {}",
+                    type_name(right)
+                ),
+            });
+        }
+    };
+
+    let regex = match Regex::new(pattern) {
+        Ok(r) => r,
+        Err(e) => {
+            return Err(EvaluationError::RegexError {
+                pattern: pattern.clone(),
+                error: e.to_string(),
+            });
+        }
+    };
+
+    Ok(Value::Bool(regex.is_match(haystack)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -465,6 +519,68 @@ mod tests {
 
         let result_partial = bid.evaluate(&data_partial).unwrap();
         assert_eq!(result_partial, None);
+    }
+
+    #[test]
+    fn regex_match_operation() {
+        let bid = BidParser::parse(r#"ON text ~= "^hello.*world$" BID score"#).unwrap();
+        let data = json!({
+            "text": "hello beautiful world",
+            "score": 100
+        });
+
+        let result = bid.evaluate(&data).unwrap();
+        assert_eq!(result, Some(json!(100)));
+
+        let data_no_match = json!({
+            "text": "goodbye cruel world",
+            "score": 50
+        });
+
+        let result_no_match = bid.evaluate(&data_no_match).unwrap();
+        assert_eq!(result_no_match, None);
+    }
+
+    #[test]
+    fn regex_match_simple_pattern() {
+        let bid = BidParser::parse(r#"ON email ~= "@.*\.com$" BID valid"#).unwrap();
+        let data = json!({
+            "email": "user@example.com",
+            "valid": true
+        });
+
+        let result = bid.evaluate(&data).unwrap();
+        assert_eq!(result, Some(json!(true)));
+    }
+
+    #[test]
+    fn regex_match_type_error_left() {
+        let bid = BidParser::parse(r#"ON 123 ~= "pattern" BID result"#).unwrap();
+        let data = json!({"result": 1});
+
+        let result = bid.evaluate(&data);
+        assert!(matches!(result, Err(EvaluationError::TypeMismatch { .. })));
+    }
+
+    #[test]
+    fn regex_match_type_error_right() {
+        let bid = BidParser::parse(r#"ON "text" ~= 456 BID result"#).unwrap();
+        let data = json!({"result": 1});
+
+        let result = bid.evaluate(&data);
+        assert!(matches!(result, Err(EvaluationError::TypeMismatch { .. })));
+    }
+
+    #[test]
+    fn regex_match_invalid_pattern() {
+        let bid = BidParser::parse(r#"ON text ~= "[invalid" BID result"#).unwrap();
+        let data = json!({
+            "text": "some text",
+            "result": 1
+        });
+
+        let result = bid.evaluate(&data);
+        assert!(matches!(result, Err(EvaluationError::RegexError { .. })));
     }
 
     #[test]
