@@ -118,6 +118,15 @@ pub enum Expression {
         /// Source position for error reporting
         position: Position,
     },
+    /// Member access on an expression (e.g., (*key).property)
+    MemberAccess {
+        /// The object expression to access
+        object: Box<Expression>,
+        /// The property name to access
+        property: String,
+        /// Source position for error reporting
+        position: Position,
+    },
 }
 
 impl Expression {
@@ -130,7 +139,8 @@ impl Expression {
             | Expression::FloatLiteral { position, .. }
             | Expression::BooleanLiteral { position, .. }
             | Expression::BinaryOperation { position, .. }
-            | Expression::UnaryOperation { position, .. } => *position,
+            | Expression::UnaryOperation { position, .. }
+            | Expression::MemberAccess { position, .. } => *position,
         }
     }
 }
@@ -230,6 +240,8 @@ pub enum UnaryOperator {
     Negate,
     /// Logical NOT
     LogicalNot,
+    /// Pointer dereference
+    Dereference,
 }
 
 impl fmt::Display for UnaryOperator {
@@ -237,6 +249,7 @@ impl fmt::Display for UnaryOperator {
         let s = match self {
             UnaryOperator::Negate => "-",
             UnaryOperator::LogicalNot => "!",
+            UnaryOperator::Dereference => "*",
         };
         write!(f, "{}", s)
     }
@@ -277,6 +290,11 @@ impl fmt::Display for Expression {
                 operator, operand, ..
             } => {
                 write!(f, "{}({})", operator, operand)
+            }
+            Expression::MemberAccess {
+                object, property, ..
+            } => {
+                write!(f, "({}).{}", object, property)
             }
         }
     }
@@ -1090,6 +1108,16 @@ impl<'a> Parser<'a> {
                     position,
                 })
             }
+            TokenType::Multiply => {
+                let position = self.current_token.position;
+                self.advance()?;
+                let operand = self.parse_unary()?;
+                Ok(Expression::UnaryOperation {
+                    operator: UnaryOperator::Dereference,
+                    operand: Box::new(operand),
+                    position,
+                })
+            }
             _ => self.parse_primary(),
         }
     }
@@ -1144,9 +1172,33 @@ impl<'a> Parser<'a> {
             }
             TokenType::LeftParen => {
                 self.advance()?;
-                let expr = self.parse_expression()?;
+                let mut expr = self.parse_expression()?;
                 if matches!(self.current_token.token_type, TokenType::RightParen) {
                     self.advance()?;
+
+                    // Handle member access after parenthesized expression
+                    while matches!(self.current_token.token_type, TokenType::Dot) {
+                        self.advance()?;
+                        if let TokenType::Identifier(segment) = &self.current_token.token_type {
+                            let segment = segment.clone();
+                            let position = self.current_token.position;
+                            self.advance()?;
+
+                            // Create a member access expression
+                            expr = Expression::MemberAccess {
+                                object: Box::new(expr),
+                                property: segment,
+                                position,
+                            };
+                        } else {
+                            return Err(BidParseError::UnexpectedToken {
+                                found: format!("{:?}", self.current_token.token_type),
+                                expected: "identifier".to_string(),
+                                position: self.current_token.position,
+                            });
+                        }
+                    }
+
                     Ok(expr)
                 } else {
                     Err(BidParseError::UnexpectedToken {
@@ -2134,7 +2186,7 @@ mod tests {
 
     #[test]
     fn consecutive_binary_operators() {
-        let result = BidParser::parse("ON true BID x + * y");
+        let result = BidParser::parse("ON true BID x + / y");
         assert!(matches!(result, Err(BidParseError::UnexpectedToken { .. })));
 
         let result = BidParser::parse("ON x == != y BID 1");
@@ -2294,7 +2346,7 @@ mod tests {
     fn operator_without_operands() {
         let test_cases = vec![
             ("ON + BID 1", "Plus without left operand"),
-            ("ON true BID * 1", "Multiply without left operand"),
+            ("ON true BID / 1", "Divide without left operand"),
             ("ON true BID 1 ==", "Equal without right operand"),
             ("ON && BID 1", "LogicalAnd without operands"),
         ];
@@ -2433,6 +2485,99 @@ mod tests {
         let result = BidParser::parse(r#"ON text ~= "pattern" BID 42"#).unwrap();
         let display = format!("{}", result.on_condition);
         assert!(display.contains("~="));
+    }
+
+    #[test]
+    fn parse_dereference_operator() {
+        let result = BidParser::parse("ON *key BID value").unwrap();
+
+        if let Expression::UnaryOperation {
+            operator: UnaryOperator::Dereference,
+            operand,
+            ..
+        } = result.on_condition
+        {
+            assert!(matches!(*operand, Expression::Variable { ref path, .. } if path == &["key"]));
+        } else {
+            panic!("Expected dereference operation");
+        }
+    }
+
+    #[test]
+    fn parse_dereference_with_member_access() {
+        let result = BidParser::parse("ON (*user.profile_id).active BID score").unwrap();
+
+        if let Expression::MemberAccess { object, property, .. } = result.on_condition {
+            assert_eq!(property, "active");
+            assert!(matches!(*object, Expression::UnaryOperation {
+                operator: UnaryOperator::Dereference,
+                ..
+            }));
+        } else {
+            panic!("Expected member access on dereferenced value");
+        }
+    }
+
+    #[test]
+    fn parse_chained_dereference() {
+        let result = BidParser::parse("ON **key BID 42").unwrap();
+
+        if let Expression::UnaryOperation {
+            operator: UnaryOperator::Dereference,
+            operand,
+            ..
+        } = result.on_condition
+        {
+            if let Expression::UnaryOperation {
+                operator: UnaryOperator::Dereference,
+                operand: inner_operand,
+                ..
+            } = *operand
+            {
+                assert!(
+                    matches!(*inner_operand, Expression::Variable { ref path, .. } if path == &["key"])
+                );
+            } else {
+                panic!("Expected nested dereference operation");
+            }
+        } else {
+            panic!("Expected outer dereference operation");
+        }
+    }
+
+    #[test]
+    fn dereference_operator_precedence() {
+        let result = BidParser::parse("ON *key + 1 BID value").unwrap();
+
+        if let Expression::BinaryOperation {
+            operator: BinaryOperator::Add,
+            left,
+            right,
+            ..
+        } = result.on_condition
+        {
+            assert!(matches!(
+                *left,
+                Expression::UnaryOperation {
+                    operator: UnaryOperator::Dereference,
+                    ..
+                }
+            ));
+            assert!(matches!(
+                *right,
+                Expression::IntegerLiteral { value: 1, .. }
+            ));
+        } else {
+            panic!("Expected addition with dereference having higher precedence");
+        }
+    }
+
+    #[test]
+    fn dereference_operator_display() {
+        let result = BidParser::parse("ON *key BID 42").unwrap();
+        let display = format!("{}", result.on_condition);
+        assert!(display.contains("*("));
+        assert!(display.contains("key"));
     }
 
     #[test]

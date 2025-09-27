@@ -3,6 +3,15 @@ use serde_json::Value;
 
 use crate::bid::{Bid, BinaryOperator, Expression, UnaryOperator};
 
+/// A trait for resolving keys into JSON entities.
+/// This allows the evaluation engine to work with normalized or relational data structures.
+pub trait EntityResolver {
+    /// Resolves a key into a JSON Value.
+    /// Returns Ok(None) if the key is not found.
+    /// Returns Err if the resolution process fails for other reasons.
+    fn resolve(&self, key: &Value) -> Result<Option<Value>, EvaluationError>;
+}
+
 /// Errors that can occur during bid evaluation
 #[derive(Debug, Clone)]
 pub enum EvaluationError {
@@ -30,6 +39,11 @@ pub enum EvaluationError {
         /// The regex error message
         error: String,
     },
+    /// A key used in a dereference operation was not found in the entity store
+    DerefKeyNotFound {
+        /// The key that was not found
+        key: Value,
+    },
 }
 
 impl std::fmt::Display for EvaluationError {
@@ -50,6 +64,9 @@ impl std::fmt::Display for EvaluationError {
             EvaluationError::RegexError { pattern, error } => {
                 write!(f, "Regex error for pattern {pattern:?}: {error}")
             }
+            EvaluationError::DerefKeyNotFound { key } => {
+                write!(f, "Dereference key not found: {}", key)
+            }
         }
     }
 }
@@ -59,12 +76,16 @@ impl std::error::Error for EvaluationError {}
 impl Bid {
     /// Evaluate the bid against the given JSON data
     /// Returns Some(bid_value) if the condition is met, None otherwise
-    pub fn evaluate(&self, data: &Value) -> Result<Option<Value>, EvaluationError> {
-        let condition_result = evaluate_expression(&self.on_condition, data)?;
+    pub fn evaluate(
+        &self,
+        data: &Value,
+        resolver: &impl EntityResolver,
+    ) -> Result<Option<Value>, EvaluationError> {
+        let condition_result = evaluate_expression(&self.on_condition, data, resolver)?;
 
         // Check if condition evaluates to true
         if is_truthy(&condition_result) {
-            let bid_result = evaluate_expression(&self.bid_value, data)?;
+            let bid_result = evaluate_expression(&self.bid_value, data, resolver)?;
             Ok(Some(bid_result))
         } else {
             Ok(None)
@@ -73,7 +94,11 @@ impl Bid {
 }
 
 /// Evaluate an expression against the given JSON data
-fn evaluate_expression(expr: &Expression, data: &Value) -> Result<Value, EvaluationError> {
+fn evaluate_expression(
+    expr: &Expression,
+    data: &Value,
+    resolver: &impl EntityResolver,
+) -> Result<Value, EvaluationError> {
     match expr {
         Expression::Variable { path, .. } => resolve_variable_path(data, path),
         Expression::StringLiteral { value, .. } => Ok(Value::String(value.clone())),
@@ -96,15 +121,21 @@ fn evaluate_expression(expr: &Expression, data: &Value) -> Result<Value, Evaluat
             right,
             ..
         } => {
-            let left_val = evaluate_expression(left, data)?;
-            let right_val = evaluate_expression(right, data)?;
+            let left_val = evaluate_expression(left, data, resolver)?;
+            let right_val = evaluate_expression(right, data, resolver)?;
             evaluate_binary_operation(&left_val, operator, &right_val)
         }
         Expression::UnaryOperation {
             operator, operand, ..
         } => {
-            let operand_val = evaluate_expression(operand, data)?;
-            evaluate_unary_operation(operator, &operand_val)
+            let operand_val = evaluate_expression(operand, data, resolver)?;
+            evaluate_unary_operation(operator, &operand_val, resolver)
+        }
+        Expression::MemberAccess {
+            object, property, ..
+        } => {
+            let object_val = evaluate_expression(object, data, resolver)?;
+            resolve_member_access(&object_val, property)
         }
     }
 }
@@ -131,6 +162,25 @@ fn resolve_variable_path(data: &Value, path: &[String]) -> Result<Value, Evaluat
     }
 
     Ok(current.clone())
+}
+
+/// Resolve member access on a JSON value
+fn resolve_member_access(object: &Value, property: &str) -> Result<Value, EvaluationError> {
+    match object {
+        Value::Object(map) => map
+            .get(property)
+            .ok_or_else(|| EvaluationError::VariableNotFound {
+                path: vec![property.to_string()],
+            })
+            .cloned(),
+        _ => Err(EvaluationError::TypeMismatch {
+            message: format!(
+                "Cannot access property '{}' on {}",
+                property,
+                type_name(object)
+            ),
+        }),
+    }
 }
 
 /// Evaluate a binary operation between two JSON values
@@ -181,10 +231,30 @@ fn evaluate_binary_operation(
 fn evaluate_unary_operation(
     operator: &UnaryOperator,
     operand: &Value,
+    resolver: &impl EntityResolver,
 ) -> Result<Value, EvaluationError> {
     match operator {
         UnaryOperator::Negate => negate_value(operand),
         UnaryOperator::LogicalNot => Ok(Value::Bool(!is_truthy(operand))),
+        UnaryOperator::Dereference => {
+            // Ensure the operand is a valid key type (String or Number)
+            if !operand.is_string() && !operand.is_number() {
+                return Err(EvaluationError::TypeMismatch {
+                    message: format!(
+                        "Dereference operator '*' requires a string or number key, but found {}",
+                        type_name(operand)
+                    ),
+                });
+            }
+
+            // Resolve the key using the resolver
+            match resolver.resolve(operand)? {
+                Some(entity) => Ok(entity),
+                None => Err(EvaluationError::DerefKeyNotFound {
+                    key: operand.clone(),
+                }),
+            }
+        }
     }
 }
 
@@ -486,6 +556,45 @@ mod tests {
     use super::*;
     use crate::BidParser;
     use serde_json::json;
+    use std::collections::HashMap;
+
+    /// A simple HashMap-based EntityResolver for testing
+    #[derive(Debug)]
+    struct MockEntityResolver {
+        entities: HashMap<String, Value>,
+    }
+
+    impl MockEntityResolver {
+        fn new() -> Self {
+            Self {
+                entities: HashMap::new(),
+            }
+        }
+
+        fn insert<K: Into<String>>(&mut self, key: K, value: Value) {
+            self.entities.insert(key.into(), value);
+        }
+    }
+
+    impl EntityResolver for MockEntityResolver {
+        fn resolve(&self, key: &Value) -> Result<Option<Value>, EvaluationError> {
+            let key_str = match key {
+                Value::String(s) => s.clone(),
+                Value::Number(n) => n.to_string(),
+                _ => return Ok(None),
+            };
+            Ok(self.entities.get(&key_str).cloned())
+        }
+    }
+
+    /// An empty EntityResolver for tests that don't use dereference
+    struct EmptyEntityResolver;
+
+    impl EntityResolver for EmptyEntityResolver {
+        fn resolve(&self, _key: &Value) -> Result<Option<Value>, EvaluationError> {
+            Ok(None)
+        }
+    }
 
     #[test]
     fn simple_condition_evaluation() {
@@ -496,8 +605,9 @@ mod tests {
                 "score": 100
             }
         });
+        let resolver = EmptyEntityResolver;
 
-        let result = bid.evaluate(&data).unwrap();
+        let result = bid.evaluate(&data, &resolver).unwrap();
         assert_eq!(result, Some(json!(100)));
     }
 
@@ -510,8 +620,9 @@ mod tests {
                 "score": 100
             }
         });
+        let resolver = EmptyEntityResolver;
 
-        let result = bid.evaluate(&data).unwrap();
+        let result = bid.evaluate(&data, &resolver).unwrap();
         assert_eq!(result, None);
     }
 
@@ -522,7 +633,9 @@ mod tests {
             "price": 100.0
         });
 
-        let result = bid.evaluate(&data).unwrap();
+        let resolver = EmptyEntityResolver;
+
+        let result = bid.evaluate(&data, &resolver).unwrap();
         assert_eq!(result, Some(json!(90.0)));
     }
 
@@ -534,7 +647,9 @@ mod tests {
             "discount": 10.0
         });
 
-        let result = bid.evaluate(&data).unwrap();
+        let resolver = EmptyEntityResolver;
+
+        let result = bid.evaluate(&data, &resolver).unwrap();
         assert_eq!(result, Some(json!(10.0)));
 
         let data_low_price = json!({
@@ -542,7 +657,7 @@ mod tests {
             "discount": 10.0
         });
 
-        let result_low = bid.evaluate(&data_low_price).unwrap();
+        let result_low = bid.evaluate(&data_low_price, &resolver).unwrap();
         assert_eq!(result_low, None);
     }
 
@@ -554,7 +669,9 @@ mod tests {
             "suffix": "World"
         });
 
-        let result = bid.evaluate(&data).unwrap();
+        let resolver = EmptyEntityResolver;
+
+        let result = bid.evaluate(&data, &resolver).unwrap();
         assert_eq!(result, Some(json!("Hello World")));
     }
 
@@ -567,7 +684,9 @@ mod tests {
             "bonus": 50
         });
 
-        let result = bid.evaluate(&data).unwrap();
+        let resolver = EmptyEntityResolver;
+
+        let result = bid.evaluate(&data, &resolver).unwrap();
         assert_eq!(result, Some(json!(50)));
 
         let data_partial = json!({
@@ -576,7 +695,7 @@ mod tests {
             "bonus": 50
         });
 
-        let result_partial = bid.evaluate(&data_partial).unwrap();
+        let result_partial = bid.evaluate(&data_partial, &resolver).unwrap();
         assert_eq!(result_partial, None);
     }
 
@@ -588,7 +707,9 @@ mod tests {
             "score": 100
         });
 
-        let result = bid.evaluate(&data).unwrap();
+        let resolver = EmptyEntityResolver;
+
+        let result = bid.evaluate(&data, &resolver).unwrap();
         assert_eq!(result, Some(json!(100)));
 
         let data_no_match = json!({
@@ -596,7 +717,7 @@ mod tests {
             "score": 50
         });
 
-        let result_no_match = bid.evaluate(&data_no_match).unwrap();
+        let result_no_match = bid.evaluate(&data_no_match, &resolver).unwrap();
         assert_eq!(result_no_match, None);
     }
 
@@ -608,7 +729,9 @@ mod tests {
             "valid": true
         });
 
-        let result = bid.evaluate(&data).unwrap();
+        let resolver = EmptyEntityResolver;
+
+        let result = bid.evaluate(&data, &resolver).unwrap();
         assert_eq!(result, Some(json!(true)));
     }
 
@@ -616,8 +739,9 @@ mod tests {
     fn regex_match_type_error_left() {
         let bid = BidParser::parse(r#"ON 123 ~= "pattern" BID result"#).unwrap();
         let data = json!({"result": 1});
+        let resolver = EmptyEntityResolver;
 
-        let result = bid.evaluate(&data);
+        let result = bid.evaluate(&data, &resolver);
         assert!(matches!(result, Err(EvaluationError::TypeMismatch { .. })));
     }
 
@@ -625,8 +749,9 @@ mod tests {
     fn regex_match_type_error_right() {
         let bid = BidParser::parse(r#"ON "text" ~= 456 BID result"#).unwrap();
         let data = json!({"result": 1});
+        let resolver = EmptyEntityResolver;
 
-        let result = bid.evaluate(&data);
+        let result = bid.evaluate(&data, &resolver);
         assert!(matches!(result, Err(EvaluationError::TypeMismatch { .. })));
     }
 
@@ -637,8 +762,9 @@ mod tests {
             "text": "some text",
             "result": 1
         });
+        let resolver = EmptyEntityResolver;
 
-        let result = bid.evaluate(&data);
+        let result = bid.evaluate(&data, &resolver);
         assert!(matches!(result, Err(EvaluationError::RegexError { .. })));
     }
 
@@ -650,7 +776,9 @@ mod tests {
             "penalty": 10
         });
 
-        let result = bid.evaluate(&data).unwrap();
+        let resolver = EmptyEntityResolver;
+
+        let result = bid.evaluate(&data, &resolver).unwrap();
         assert_eq!(result, Some(json!(-10)));
     }
 
@@ -669,7 +797,9 @@ mod tests {
             "bonus": 20.0
         });
 
-        let result = bid.evaluate(&data).unwrap();
+        let resolver = EmptyEntityResolver;
+
+        let result = bid.evaluate(&data, &resolver).unwrap();
         assert_eq!(result, Some(json!(140.0))); // 150 * 0.8 + 20
     }
 
@@ -679,8 +809,9 @@ mod tests {
         let data = json!({
             "user": {}
         });
+        let resolver = EmptyEntityResolver;
 
-        let result = bid.evaluate(&data);
+        let result = bid.evaluate(&data, &resolver);
         assert!(matches!(
             result,
             Err(EvaluationError::VariableNotFound { .. })
@@ -691,8 +822,9 @@ mod tests {
     fn type_mismatch_arithmetic() {
         let bid = BidParser::parse(r#"ON true BID "text" * 5"#).unwrap();
         let data = json!({});
+        let resolver = EmptyEntityResolver;
 
-        let result = bid.evaluate(&data);
+        let result = bid.evaluate(&data, &resolver);
         assert!(matches!(result, Err(EvaluationError::TypeMismatch { .. })));
     }
 
@@ -700,8 +832,9 @@ mod tests {
     fn division_by_zero() {
         let bid = BidParser::parse("ON true BID 10 / 0").unwrap();
         let data = json!({});
+        let resolver = EmptyEntityResolver;
 
-        let result = bid.evaluate(&data);
+        let result = bid.evaluate(&data, &resolver);
         assert!(matches!(result, Err(EvaluationError::DivisionByZero)));
     }
 
@@ -713,7 +846,9 @@ mod tests {
             "exponent": 3.0
         });
 
-        let result = bid.evaluate(&data).unwrap();
+        let resolver = EmptyEntityResolver;
+
+        let result = bid.evaluate(&data, &resolver).unwrap();
         assert_eq!(result, Some(json!(8.0)));
     }
 
@@ -762,7 +897,9 @@ mod tests {
             }
         });
 
-        let result = bid.evaluate(&data).unwrap();
+        let resolver = EmptyEntityResolver;
+
+        let result = bid.evaluate(&data, &resolver).unwrap();
         assert_eq!(result, Some(json!(95)));
     }
 
@@ -774,7 +911,9 @@ mod tests {
             "discount": 15.0
         });
 
-        let result = bid.evaluate(&data).unwrap();
+        let resolver = EmptyEntityResolver;
+
+        let result = bid.evaluate(&data, &resolver).unwrap();
         assert_eq!(result, Some(json!(15.0)));
     }
 
@@ -786,7 +925,9 @@ mod tests {
             "price": 25.0
         });
 
-        let result = bid.evaluate(&data).unwrap();
+        let resolver = EmptyEntityResolver;
+
+        let result = bid.evaluate(&data, &resolver).unwrap();
         assert_eq!(result, Some(json!(25.0)));
     }
 
@@ -798,7 +939,9 @@ mod tests {
             "divisor": 5
         });
 
-        let result = bid.evaluate(&data).unwrap();
+        let resolver = EmptyEntityResolver;
+
+        let result = bid.evaluate(&data, &resolver).unwrap();
         assert_eq!(result, Some(json!(2)));
     }
 
@@ -811,7 +954,9 @@ mod tests {
             "result": 42
         });
 
-        let result = bid.evaluate(&data).unwrap();
+        let resolver = EmptyEntityResolver;
+
+        let result = bid.evaluate(&data, &resolver).unwrap();
         assert_eq!(result, Some(json!(42)));
     }
 
@@ -824,7 +969,127 @@ mod tests {
             "result": 42
         });
 
-        let result = bid.evaluate(&data).unwrap();
+        let resolver = EmptyEntityResolver;
+
+        let result = bid.evaluate(&data, &resolver).unwrap();
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn dereference_successful_resolution() {
+        let bid = BidParser::parse("ON *user.profile_id BID 100").unwrap();
+        let data = json!({
+            "user": {
+                "profile_id": "prof_123"
+            }
+        });
+
+        let mut resolver = MockEntityResolver::new();
+        resolver.insert(
+            "prof_123",
+            json!({
+                "id": "prof_123",
+                "active": true,
+                "score": 95
+            }),
+        );
+
+        let result = bid.evaluate(&data, &resolver).unwrap();
+        assert_eq!(result, Some(json!(100)));
+    }
+
+    #[test]
+    fn dereference_with_member_access() {
+        let bid =
+            BidParser::parse("ON (*user.profile_id).active BID (*user.profile_id).score").unwrap();
+        let data = json!({
+            "user": {
+                "profile_id": "prof_123"
+            }
+        });
+
+        let mut resolver = MockEntityResolver::new();
+        resolver.insert(
+            "prof_123",
+            json!({
+                "id": "prof_123",
+                "active": true,
+                "score": 95
+            }),
+        );
+
+        let result = bid.evaluate(&data, &resolver).unwrap();
+        assert_eq!(result, Some(json!(95)));
+    }
+
+    #[test]
+    fn dereference_key_not_found() {
+        let bid = BidParser::parse("ON *key_var BID 100").unwrap();
+        let data = json!({
+            "key_var": "nonexistent_key"
+        });
+        let resolver = MockEntityResolver::new();
+
+        let result = bid.evaluate(&data, &resolver);
+        assert!(matches!(
+            result,
+            Err(EvaluationError::DerefKeyNotFound { .. })
+        ));
+    }
+
+    #[test]
+    fn dereference_invalid_key_type() {
+        let bid = BidParser::parse("ON *invalid_key BID 100").unwrap();
+        let data = json!({
+            "invalid_key": true  // boolean is not a valid key type
+        });
+        let resolver = MockEntityResolver::new();
+
+        let result = bid.evaluate(&data, &resolver);
+        assert!(matches!(result, Err(EvaluationError::TypeMismatch { .. })));
+    }
+
+    #[test]
+    fn dereference_chained() {
+        let bid = BidParser::parse("ON **key BID 100").unwrap();
+        let data = json!({
+            "key": "ptr_456"
+        });
+
+        let mut resolver = MockEntityResolver::new();
+        resolver.insert("ptr_456", json!("final_value"));
+        resolver.insert("final_value", json!(true));
+
+        let result = bid.evaluate(&data, &resolver).unwrap();
+        assert_eq!(result, Some(json!(100)));
+    }
+
+    #[test]
+    fn dereference_in_bid_value() {
+        let bid = BidParser::parse("ON true BID *price_key").unwrap();
+        let data = json!({
+            "price_key": "price_123"
+        });
+
+        let mut resolver = MockEntityResolver::new();
+        resolver.insert("price_123", json!(150.75));
+
+        let result = bid.evaluate(&data, &resolver).unwrap();
+        assert_eq!(result, Some(json!(150.75)));
+    }
+
+    #[test]
+    fn dereference_with_arithmetic() {
+        let bid = BidParser::parse("ON true BID (*base_price) * discount").unwrap();
+        let data = json!({
+            "base_price": "price_456",
+            "discount": 0.8
+        });
+
+        let mut resolver = MockEntityResolver::new();
+        resolver.insert("price_456", json!(200.0));
+
+        let result = bid.evaluate(&data, &resolver).unwrap();
+        assert_eq!(result, Some(json!(160.0)));
     }
 }
