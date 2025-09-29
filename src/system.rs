@@ -1042,6 +1042,7 @@ mod tests {
             tools: vec!["Read".to_string(), "Write".to_string()],
             model: "inherit".to_string(),
             color: "blue".to_string(),
+            bid: Vec::new(),
             content: "You are a test system.".to_string(),
         }
     }

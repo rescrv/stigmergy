@@ -34,7 +34,7 @@ use std::fmt;
 mod evaluate;
 
 /// Position information for error reporting
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Position {
     /// Line number (1-based)
     pub line: usize,
@@ -61,7 +61,7 @@ impl fmt::Display for Position {
 }
 
 /// A parsed expression that can be evaluated
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Expression {
     /// Variable reference with dot-separated path (e.g., "user.profile.name")
     Variable {
@@ -146,7 +146,7 @@ impl Expression {
 }
 
 /// Binary operators with precedence information
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum BinaryOperator {
     // Arithmetic operators
     /// Addition
@@ -234,7 +234,7 @@ impl fmt::Display for BinaryOperator {
 }
 
 /// Unary operators
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum UnaryOperator {
     /// Arithmetic negation
     Negate,
@@ -256,7 +256,7 @@ impl fmt::Display for UnaryOperator {
 }
 
 /// A complete bid expression with condition and value
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Bid {
     /// The condition expression after ON
     pub on_condition: Expression,
@@ -2507,12 +2507,18 @@ mod tests {
     fn parse_dereference_with_member_access() {
         let result = BidParser::parse("ON (*user.profile_id).active BID score").unwrap();
 
-        if let Expression::MemberAccess { object, property, .. } = result.on_condition {
+        if let Expression::MemberAccess {
+            object, property, ..
+        } = result.on_condition
+        {
             assert_eq!(property, "active");
-            assert!(matches!(*object, Expression::UnaryOperation {
-                operator: UnaryOperator::Dereference,
-                ..
-            }));
+            assert!(matches!(
+                *object,
+                Expression::UnaryOperation {
+                    operator: UnaryOperator::Dereference,
+                    ..
+                }
+            ));
         } else {
             panic!("Expected member access on dereferenced value");
         }
