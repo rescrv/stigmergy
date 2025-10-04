@@ -46,14 +46,40 @@
 //! "#;
 //!
 //! let config = SystemParser::parse(config_content).unwrap();
-//! assert_eq!(config.name, "my-system");
+//! assert_eq!(config.name, stigmergy::SystemName::new("my-system").unwrap());
 //! assert_eq!(config.tools, vec!["Glob", "Grep", "Read"]);
 //! assert_eq!(config.content.trim(), "My System\n\nThis system does amazing things.");
 //! ```
 
 use std::collections::HashMap;
 
-use crate::{Bid, BidParseError, BidParser};
+use crate::{Bid, BidParseError, BidParser, SystemName};
+
+/// Custom serde module for serializing/deserializing Vec<Bid> as Vec<String>
+mod bid_serde {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use crate::{Bid, BidParser};
+
+    pub fn serialize<S>(bids: &[Bid], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let strings: Vec<String> = bids.iter().map(|b| b.to_string()).collect();
+        strings.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<Bid>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let strings: Vec<String> = Vec::deserialize(deserializer)?;
+        strings
+            .into_iter()
+            .map(|s| BidParser::parse(&s).map_err(serde::de::Error::custom))
+            .collect()
+    }
+}
 
 /// A parsed system configuration containing metadata and content.
 ///
@@ -74,7 +100,7 @@ use crate::{Bid, BidParseError, BidParser};
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SystemConfig {
     /// The system name (required field)
-    pub name: String,
+    pub name: SystemName,
     /// A description of what the system does (required field)
     pub description: String,
     /// List of tools available to the system (required field, parsed from comma-separated values)
@@ -84,6 +110,7 @@ pub struct SystemConfig {
     /// The color theme for the system (required field)
     pub color: String,
     /// List of bid expressions (optional field, parsed from bullet list format)
+    #[serde(with = "bid_serde")]
     pub bid: Vec<Bid>,
     /// The markdown content that follows the frontmatter
     pub content: String,
@@ -146,12 +173,12 @@ impl SystemConfig {
     /// - Bid: Maximum 100 bid expressions
     pub fn validate(&self) -> Result<(), ParseError> {
         // Validate name length (1-100 characters)
-        if self.name.is_empty() {
+        if self.name.as_str().is_empty() {
             return Err(ParseError::ValidationError(
                 "Name cannot be empty".to_string(),
             ));
         }
-        if self.name.len() > 100 {
+        if self.name.as_str().len() > 100 {
             return Err(ParseError::ValidationError(
                 "Name cannot exceed 100 characters".to_string(),
             ));
@@ -253,7 +280,7 @@ impl SystemConfig {
 /// "#;
 ///
 /// let config = SystemParser::parse(content).unwrap();
-/// assert_eq!(config.name, "example");
+/// assert_eq!(config.name, stigmergy::SystemName::new("example").unwrap());
 /// assert_eq!(config.tools, vec!["Tool1", "Tool2"]);
 /// ```
 pub struct SystemParser;
@@ -296,7 +323,7 @@ impl SystemParser {
     /// "#;
     ///
     /// let config = SystemParser::parse(content).unwrap();
-    /// assert_eq!(config.name, "test-system");
+    /// assert_eq!(config.name, stigmergy::SystemName::new("test-system").unwrap());
     /// assert_eq!(config.tools.len(), 2);
     /// ```
     ///
@@ -308,8 +335,13 @@ impl SystemParser {
         let (header_section, markdown_content) = Self::split_frontmatter(content)?;
         let header_data = Self::parse_header_section(&header_section)?;
 
+        let name_str = Self::get_required_field(&header_data, "name")?;
+        let name = SystemName::new(&name_str).ok_or_else(|| {
+            ParseError::ValidationError(format!("Invalid system name: {}", name_str))
+        })?;
+
         let config = SystemConfig {
-            name: Self::get_required_field(&header_data, "name")?,
+            name,
             description: Self::get_required_field(&header_data, "description")?,
             tools: Self::parse_tools(&header_data)?,
             model: Self::get_required_field(&header_data, "model")?,
@@ -482,7 +514,7 @@ You are the DRY Principal, an expert code architect.
 
         let config = SystemParser::parse(content).unwrap();
 
-        assert_eq!(config.name, "dry-principal");
+        assert_eq!(config.name, SystemName::new("dry-principal").unwrap());
         assert_eq!(
             config.description,
             "Use this agent when you need to identify and eliminate code duplication"
@@ -534,7 +566,7 @@ System content with bids.
 
         let config = SystemParser::parse(content).unwrap();
 
-        assert_eq!(config.name, "example-system");
+        assert_eq!(config.name, SystemName::new("example-system").unwrap());
         assert_eq!(config.bid.len(), 3);
 
         // Verify the first bid parses correctly
@@ -1353,7 +1385,7 @@ The bids should work alongside all other configuration.
         let config = SystemParser::parse(content).unwrap();
 
         // Verify all fields parsed correctly
-        assert_eq!(config.name, "integration-test");
+        assert_eq!(config.name, SystemName::new("integration-test").unwrap());
         assert_eq!(config.tools.len(), 5);
         assert_eq!(config.model, "gpt-4");
         assert_eq!(config.color, "#FF5733");
@@ -1417,5 +1449,58 @@ Content.
 
         let config = SystemParser::parse(&content).unwrap();
         assert_eq!(config.bid.len(), 1);
+    }
+
+    #[test]
+    fn system_config_yaml_deserialization() {
+        let yaml = r#"
+name: test-system
+description: A test system configuration
+tools:
+  - Glob
+  - Grep
+  - Read
+model: inherit
+color: blue
+bid:
+  - ON true BID 100
+  - ON score > 50 BID score * 2
+content: |
+  This is the system content.
+
+  It supports multiple lines.
+"#;
+        let config: SystemConfig = serde_yml::from_str(yaml).unwrap();
+        assert_eq!(config.name, SystemName::new("test-system").unwrap());
+        assert_eq!(config.description, "A test system configuration");
+        assert_eq!(config.tools, vec!["Glob", "Grep", "Read"]);
+        assert_eq!(config.model, "inherit");
+        assert_eq!(config.color, "blue");
+        assert_eq!(config.bid.len(), 2);
+        assert!(config.content.contains("This is the system content"));
+    }
+
+    #[test]
+    fn system_config_yaml_json_roundtrip() {
+        let original = SystemConfig {
+            name: SystemName::new("roundtrip-test").unwrap(),
+            description: "Testing roundtrip".to_string(),
+            tools: vec!["Read".to_string(), "Write".to_string()],
+            model: "inherit".to_string(),
+            color: "green".to_string(),
+            bid: vec![],
+            content: "Test content".to_string(),
+        };
+
+        let yaml = serde_yml::to_string(&original).unwrap();
+        let deserialized: SystemConfig = serde_yml::from_str(&yaml).unwrap();
+
+        assert_eq!(original.name, deserialized.name);
+        assert_eq!(original.description, deserialized.description);
+        assert_eq!(original.tools, deserialized.tools);
+        assert_eq!(original.model, deserialized.model);
+        assert_eq!(original.color, deserialized.color);
+        assert_eq!(original.bid, deserialized.bid);
+        assert_eq!(original.content, deserialized.content);
     }
 }

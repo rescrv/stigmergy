@@ -4,7 +4,7 @@
 //! used across multiple command handlers to reduce code duplication.
 
 use crate::commands::errors::UserError;
-use crate::{Entity, SystemId, cli_utils, http_utils};
+use crate::{Entity, SystemName, cli_utils, http_utils};
 use handled::Handle;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -40,15 +40,17 @@ pub fn parse_entity_id_or_exit(entity_id_str: &str) -> Entity {
     parse_id_or_exit_generic(entity_id_str, "entity ID")
 }
 
-/// Validates and parses a system ID from a string with enhanced error handling.
+/// Validates and parses a system name from a string.
 ///
 /// # Arguments
-/// * `system_id_str` - The string representation of the system ID
+/// * `name_str` - The string representation of the system name
 ///
 /// # Returns
-/// The parsed System ID, or exits the program with an enhanced error message
-pub fn parse_system_id_or_exit(system_id_str: &str) -> SystemId {
-    parse_id_or_exit_generic(system_id_str, "system ID")
+/// The parsed SystemName, or exits the program with an error message
+pub fn parse_system_name_or_exit(name_str: &str) -> SystemName {
+    name_str.parse().unwrap_or_else(|e| {
+        cli_utils::exit_with_error(&format!("{}", e));
+    })
 }
 
 /// Validates required arguments count and exits with usage error if insufficient.

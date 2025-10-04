@@ -55,7 +55,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use crate::{ComponentDefinition, Entity, System, SystemId};
+use crate::{ComponentDefinition, Entity, System};
 
 /// Type alias for component key-value pairs returned by list operations.
 ///
@@ -334,16 +334,16 @@ pub trait DataStore: Send + Sync {
     /// * `Err(DataStoreError::AlreadyExists)` - System with this ID already exists
     /// * `Err(DataStoreError::Internal)` - Internal storage error
     fn create_system(&self, system: &System) -> Result<(), DataStoreError>;
-    /// Retrieves a system by its identifier.
+    /// Retrieves a system by its name.
     ///
     /// # Arguments
-    /// * `system_id` - The system identifier
+    /// * `name` - The system name (identifier)
     ///
     /// # Returns
     /// * `Ok(Some(System))` - System found and returned
     /// * `Ok(None)` - System not found
     /// * `Err(DataStoreError::Internal)` - Internal storage error
-    fn get_system(&self, system_id: &SystemId) -> Result<Option<System>, DataStoreError>;
+    fn get_system(&self, name: &str) -> Result<Option<System>, DataStoreError>;
     /// Updates an existing system.
     ///
     /// # Arguments
@@ -357,13 +357,13 @@ pub trait DataStore: Send + Sync {
     /// Deletes a system from the data store.
     ///
     /// # Arguments
-    /// * `system_id` - The system identifier to delete
+    /// * `name` - The system name (identifier) to delete
     ///
     /// # Returns
     /// * `Ok(true)` - System existed and was deleted
     /// * `Ok(false)` - System did not exist
     /// * `Err(DataStoreError::Internal)` - Internal storage error
-    fn delete_system(&self, system_id: &SystemId) -> Result<bool, DataStoreError>;
+    fn delete_system(&self, name: &str) -> Result<bool, DataStoreError>;
     /// Deletes all systems from the data store.
     ///
     /// # Returns
@@ -459,7 +459,7 @@ pub struct InMemoryDataStore {
     entities: Mutex<HashMap<String, Entity>>,
     component_definitions: Mutex<HashMap<String, ComponentDefinition>>,
     components: Mutex<HashMap<(Entity, String), Value>>,
-    systems: Mutex<HashMap<SystemId, System>>,
+    systems: Mutex<HashMap<String, System>>,
 }
 
 impl InMemoryDataStore {
@@ -690,24 +690,26 @@ impl DataStore for InMemoryDataStore {
 
     fn create_system(&self, system: &System) -> Result<(), DataStoreError> {
         let mut systems = self.systems.lock().unwrap();
+        let name = system.name().to_string();
 
-        if systems.contains_key(&system.id) {
+        if systems.contains_key(&name) {
             return Err(DataStoreError::AlreadyExists);
         }
 
-        systems.insert(system.id, system.clone());
+        systems.insert(name, system.clone());
         Ok(())
     }
 
-    fn get_system(&self, system_id: &SystemId) -> Result<Option<System>, DataStoreError> {
+    fn get_system(&self, name: &str) -> Result<Option<System>, DataStoreError> {
         let systems = self.systems.lock().unwrap();
-        Ok(systems.get(system_id).cloned())
+        Ok(systems.get(name).cloned())
     }
 
     fn update_system(&self, system: &System) -> Result<bool, DataStoreError> {
         let mut systems = self.systems.lock().unwrap();
+        let name = system.name().to_string();
 
-        if let std::collections::hash_map::Entry::Occupied(mut e) = systems.entry(system.id) {
+        if let std::collections::hash_map::Entry::Occupied(mut e) = systems.entry(name) {
             e.insert(system.clone());
             Ok(true)
         } else {
@@ -715,9 +717,9 @@ impl DataStore for InMemoryDataStore {
         }
     }
 
-    fn delete_system(&self, system_id: &SystemId) -> Result<bool, DataStoreError> {
+    fn delete_system(&self, name: &str) -> Result<bool, DataStoreError> {
         let mut systems = self.systems.lock().unwrap();
-        Ok(systems.remove(system_id).is_some())
+        Ok(systems.remove(name).is_some())
     }
 
     fn delete_all_systems(&self) -> Result<u32, DataStoreError> {
@@ -736,7 +738,7 @@ impl DataStore for InMemoryDataStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Component;
+    use crate::{Component, SystemName};
     use serde_json::json;
 
     fn test_entity() -> Entity {
@@ -972,10 +974,11 @@ mod tests {
         );
     }
 
+    use crate::SystemConfig;
+
     fn test_system() -> System {
-        use crate::SystemConfig;
         let config = SystemConfig {
-            name: "test-system".to_string(),
+            name: SystemName::new("test-system").unwrap(),
             description: "A test system".to_string(),
             tools: vec!["Read".to_string(), "Write".to_string()],
             model: "inherit".to_string(),
@@ -983,20 +986,20 @@ mod tests {
             bid: Vec::new(),
             content: "You are a test system.".to_string(),
         };
-        System::with_id(SystemId::new([1u8; 32]), config)
+        System::new(config)
     }
 
     #[test]
     fn system_create_and_get() {
         let store = InMemoryDataStore::new();
         let system = test_system();
-        let system_id = system.id;
+        let system_name = system.name();
 
         // Create system
         assert!(store.create_system(&system).is_ok());
 
         // Get system
-        let retrieved = store.get_system(&system_id).unwrap();
+        let retrieved = store.get_system(system_name.as_str()).unwrap();
         assert_eq!(retrieved, Some(system.clone()));
 
         // Try to create duplicate
@@ -1010,21 +1013,22 @@ mod tests {
     fn system_update() {
         let store = InMemoryDataStore::new();
         let mut system = test_system();
-        let system_id = system.id;
+        let system_name = system.name().to_string();
 
         // Create system
         store.create_system(&system).unwrap();
 
         // Update system
-        system.config.name = "updated-system".to_string();
+        system.config.description = "Updated description".to_string();
         assert!(store.update_system(&system).unwrap());
 
         // Verify update
-        let retrieved = store.get_system(&system_id).unwrap().unwrap();
-        assert_eq!(retrieved.config.name, "updated-system");
+        let retrieved = store.get_system(&system_name).unwrap().unwrap();
+        assert_eq!(retrieved.config.description, "Updated description");
 
         // Try to update non-existent system
-        let non_existent_system = System::with_id(SystemId::new([2u8; 32]), system.config.clone());
+        let mut non_existent_system = test_system();
+        non_existent_system.config.name = SystemName::new("non-existent").unwrap();
         assert!(!store.update_system(&non_existent_system).unwrap());
     }
 
@@ -1032,17 +1036,17 @@ mod tests {
     fn system_delete() {
         let store = InMemoryDataStore::new();
         let system = test_system();
-        let system_id = system.id;
+        let system_name = system.name();
 
         // Create and delete system
         store.create_system(&system).unwrap();
-        assert!(store.delete_system(&system_id).unwrap());
+        assert!(store.delete_system(system_name.as_str()).unwrap());
 
         // Verify deleted
-        assert_eq!(store.get_system(&system_id).unwrap(), None);
+        assert_eq!(store.get_system(system_name.as_str()).unwrap(), None);
 
         // Delete non-existent
-        assert!(!store.delete_system(&system_id).unwrap());
+        assert!(!store.delete_system(system_name.as_str()).unwrap());
     }
 
     #[test]
@@ -1050,7 +1054,7 @@ mod tests {
         let store = InMemoryDataStore::new();
         let system1 = test_system();
         let mut system2 = test_system();
-        system2.id = SystemId::new([2u8; 32]);
+        system2.config.name = SystemName::new("system2").unwrap();
 
         // Create systems
         store.create_system(&system1).unwrap();
@@ -1068,8 +1072,7 @@ mod tests {
         let store = InMemoryDataStore::new();
         let system1 = test_system();
         let mut system2 = test_system();
-        system2.id = SystemId::new([2u8; 32]);
-        system2.config.name = "system2".to_string();
+        system2.config.name = SystemName::new("system2").unwrap();
 
         // Create systems
         store.create_system(&system1).unwrap();

@@ -4,9 +4,9 @@
 //! listing, retrieval, updating, and deletion of systems.
 
 use crate::{
-    CreateSystemFromMarkdownRequest, CreateSystemRequest, CreateSystemResponse, System,
-    SystemConfig, SystemListItem, cli_utils,
-    commands::shared::{dispatch_command, parse_system_id_or_exit, validate_args_count_or_exit},
+    CreateSystemFromMarkdownRequest, CreateSystemResponse, System, SystemConfig, SystemListItem,
+    cli_utils,
+    commands::shared::{dispatch_command, parse_system_name_or_exit, validate_args_count_or_exit},
     http_utils,
 };
 
@@ -44,10 +44,8 @@ Example: stigctl system create '{"name":"test","description":"A test system","to
     let config: SystemConfig = serde_json::from_str(config_str)
         .unwrap_or_else(|e| cli_utils::exit_with_error(&format!("Invalid config JSON: {}", e)));
 
-    let request = CreateSystemRequest { config };
-
     let response = http_utils::execute_or_exit(
-        || client.post::<CreateSystemRequest, CreateSystemResponse>("system", &request),
+        || client.post::<SystemConfig, CreateSystemResponse>("system", &config),
         "Failed to create system",
     )
     .await;
@@ -101,16 +99,16 @@ async fn handle_system_list(args: &[String], client: &http_utils::StigmergyClien
     cli_utils::print_json_or_exit(&systems, "systems");
 }
 
-/// Handles system retrieval by ID.
+/// Handles system retrieval by name.
 async fn handle_system_get(args: &[String], client: &http_utils::StigmergyClient) {
-    validate_args_count_or_exit(args, 2, 2, "get", "Usage: stigctl system get <system-id>");
+    validate_args_count_or_exit(args, 2, 2, "get", "Usage: stigctl system get <system-name>");
 
-    let system_id = parse_system_id_or_exit(&args[1]);
-    let path = format!("system/{}", system_id.base64_part());
+    let system_name = parse_system_name_or_exit(&args[1]);
+    let path = format!("system/{}", system_name.as_str());
 
     let system = http_utils::execute_or_exit(
         || client.get::<System>(&path),
-        &format!("Failed to get system {}", system_id),
+        &format!("Failed to get system {}", system_name),
     )
     .await;
 
@@ -124,19 +122,19 @@ async fn handle_system_update(args: &[String], client: &http_utils::StigmergyCli
         3,
         3,
         "update",
-        "Usage: stigctl system update <system-id> <config-json>",
+        "Usage: stigctl system update <system-name> <config-json>",
     );
 
-    let system_id = parse_system_id_or_exit(&args[1]);
+    let system_name = parse_system_name_or_exit(&args[1]);
     let config_str = &args[2];
 
     let config: SystemConfig = serde_json::from_str(config_str)
         .unwrap_or_else(|e| cli_utils::exit_with_error(&format!("Invalid config JSON: {}", e)));
 
-    let path = format!("system/{}", system_id.base64_part());
+    let path = format!("system/{}", system_name.as_str());
     let system = http_utils::execute_or_exit(
         || client.put::<SystemConfig, System>(&path, &config),
-        &format!("Failed to update system {}", system_id),
+        &format!("Failed to update system {}", system_name),
     )
     .await;
 
@@ -151,17 +149,17 @@ async fn handle_system_delete(args: &[String], client: &http_utils::StigmergyCli
         2,
         2,
         "delete",
-        "Usage: stigctl system delete <system-id>",
+        "Usage: stigctl system delete <system-name>",
     );
 
-    let system_id = parse_system_id_or_exit(&args[1]);
-    let path = format!("system/{}", system_id.base64_part());
+    let system_name = parse_system_name_or_exit(&args[1]);
+    let path = format!("system/{}", system_name.as_str());
 
     http_utils::execute_or_exit(
         || client.delete(&path),
-        &format!("Failed to delete system {}", system_id),
+        &format!("Failed to delete system {}", system_name),
     )
     .await;
 
-    println!("Deleted system: {}", system_id);
+    println!("Deleted system: {}", system_name);
 }

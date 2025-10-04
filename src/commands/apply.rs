@@ -8,7 +8,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use crate::{
-    CreateSystemRequest, SaveEntry, SaveOperation, cli_utils, commands::errors::HttpOperationError,
+    SaveEntry, SaveOperation, cli_utils, commands::errors::HttpOperationError,
     commands::shared::validate_args_count_or_exit,
 };
 
@@ -203,10 +203,7 @@ async fn apply_save_entry(
         SaveOperation::SystemCreate { config, .. } => {
             let url = format!("{}/api/v1/system", base_url);
             if let Some(config) = config {
-                let request = CreateSystemRequest {
-                    config: config.clone(),
-                };
-                let response = client.post(&url).json(&request).send().await?;
+                let response = client.post(&url).json(&config).send().await?;
                 handle_response(response, "SystemCreate").await?;
             } else {
                 return Err("SystemCreate operation missing config".into());

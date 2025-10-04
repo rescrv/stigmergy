@@ -11,6 +11,7 @@
 //! - **HTTP API**: Complete REST API for component definition and instance management
 //! - **Flexible Schemas**: Support for complex schemas including oneOf unions and enums
 //! - **Entity Scoping**: Components are scoped to specific entities
+//! - **JSON and YAML Support**: Component definitions accept both JSON and YAML based on Content-Type header
 //!
 //! ## Component Architecture
 //!
@@ -70,11 +71,34 @@
 //! let invalid_data = json!({"x": 1.0, "y": 2.0});
 //! assert!(definition.validate_component_data(&invalid_data).is_err());
 //! ```
+//!
+//! ### HTTP API with YAML Support
+//!
+//! The HTTP API automatically detects the content type and accepts both JSON and YAML:
+//!
+//! ```bash
+//! # POST with JSON (default)
+//! curl -X POST http://localhost:8080/componentdefinition \
+//!   -H "Content-Type: application/json" \
+//!   -d '{"component":"Position","schema":{"type":"object","properties":{"x":{"type":"number"}}}}'
+//!
+//! # POST with YAML
+//! curl -X POST http://localhost:8080/componentdefinition \
+//!   -H "Content-Type: application/yaml" \
+//!   -d 'component: Position
+//! schema:
+//!   type: object
+//!   properties:
+//!     x:
+//!       type: number'
+//! ```
 
 use std::collections::HashMap;
 
 use axum::Router;
-use axum::extract::{Path, Query, State};
+use axum::async_trait;
+use axum::body::Bytes;
+use axum::extract::{FromRequest, Path, Query, Request, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 use axum::routing::get;
@@ -394,6 +418,41 @@ impl ComponentDefinition {
     }
 }
 
+/// A wrapper that extracts ComponentDefinition from either JSON or YAML based on Content-Type.
+pub struct ComponentDefinitionExtractor(pub ComponentDefinition);
+
+#[async_trait]
+impl<S> FromRequest<S> for ComponentDefinitionExtractor
+where
+    S: Send + Sync,
+{
+    type Rejection = (StatusCode, &'static str);
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        let (parts, body) = req.into_parts();
+        let content_type = parts
+            .headers
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/json")
+            .to_string();
+
+        let bytes = Bytes::from_request(Request::from_parts(parts, body), state)
+            .await
+            .map_err(|_| (StatusCode::BAD_REQUEST, "failed to read request body"))?;
+
+        let definition = if content_type.contains("yaml") || content_type.contains("yml") {
+            serde_yml::from_slice::<ComponentDefinition>(&bytes)
+                .map_err(|_| (StatusCode::BAD_REQUEST, "invalid yaml"))?
+        } else {
+            serde_json::from_slice::<ComponentDefinition>(&bytes)
+                .map_err(|_| (StatusCode::BAD_REQUEST, "invalid json"))?
+        };
+
+        Ok(ComponentDefinitionExtractor(definition))
+    }
+}
+
 /// Validates the structure of a JSON schema to ensure it's well-formed.
 ///
 /// This function recursively validates JSON schema objects to ensure they follow
@@ -508,7 +567,7 @@ async fn get_component_definitions(
 
 async fn create_component_definition(
     State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
-    Json(definition): Json<ComponentDefinition>,
+    ComponentDefinitionExtractor(definition): ComponentDefinitionExtractor,
 ) -> Result<Json<ComponentDefinition>, (StatusCode, &'static str)> {
     let validation_result = match definition.validate_schema() {
         Ok(()) => LogValidationResult::success(),
@@ -557,7 +616,7 @@ async fn create_component_definition(
 
 async fn update_component_definition(
     State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
-    Json(definition): Json<ComponentDefinition>,
+    ComponentDefinitionExtractor(definition): ComponentDefinitionExtractor,
 ) -> Result<Json<ComponentDefinition>, (StatusCode, &'static str)> {
     let validation_result = match definition.validate_schema() {
         Ok(()) => LogValidationResult::success(),
@@ -708,7 +767,7 @@ async fn get_component_definition_by_id(
 async fn update_component_definition_by_id(
     State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
     Path(id): Path<String>,
-    Json(definition): Json<ComponentDefinition>,
+    ComponentDefinitionExtractor(definition): ComponentDefinitionExtractor,
 ) -> Result<Json<ComponentDefinition>, (StatusCode, &'static str)> {
     let validation_result = match definition.validate_schema() {
         Ok(()) => LogValidationResult::success(),
@@ -1601,6 +1660,37 @@ mod tests {
         }
     }
 
+    #[test]
+    fn component_definition_yaml_deserialization() {
+        let yaml = r#"
+component: Position
+schema:
+  type: object
+  properties:
+    x:
+      type: number
+    y:
+      type: number
+  required:
+    - x
+    - y
+"#;
+        let definition: ComponentDefinition = serde_yml::from_str(yaml).unwrap();
+        assert_eq!(definition.component.as_str(), "Position");
+        assert_eq!(definition.schema["type"], "object");
+        assert!(definition.schema["properties"]["x"]["type"] == "number");
+        assert!(definition.schema["properties"]["y"]["type"] == "number");
+    }
+
+    #[test]
+    fn component_definition_yaml_json_roundtrip() {
+        let json_def = sample_component_definition();
+        let yaml = serde_yml::to_string(&json_def).unwrap();
+        let yaml_def: ComponentDefinition = serde_yml::from_str(&yaml).unwrap();
+        assert_eq!(json_def.component, yaml_def.component);
+        assert_eq!(json_def.schema, yaml_def.schema);
+    }
+
     // Component Definition HTTP Endpoint Tests
     #[tokio::test]
     async fn get_component_definitions_logs_correctly() {
@@ -1648,9 +1738,11 @@ mod tests {
         assert!(logs_before.is_empty());
 
         let data_store = test_data_store();
-        let result =
-            create_component_definition(State((logger, data_store)), Json(definition.clone()))
-                .await;
+        let result = create_component_definition(
+            State((logger, data_store)),
+            ComponentDefinitionExtractor(definition.clone()),
+        )
+        .await;
         assert!(result.is_ok());
 
         let logs_after = load_entries(&log_path);
@@ -1685,9 +1777,11 @@ mod tests {
         assert!(logs_before.is_empty());
 
         let data_store = test_data_store();
-        let result =
-            create_component_definition(State((logger, data_store)), Json(definition.clone()))
-                .await;
+        let result = create_component_definition(
+            State((logger, data_store)),
+            ComponentDefinitionExtractor(definition.clone()),
+        )
+        .await;
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
@@ -1727,7 +1821,7 @@ mod tests {
 
         let result = update_component_definition(
             State((logger, test_data_store())),
-            Json(definition.clone()),
+            ComponentDefinitionExtractor(definition.clone()),
         )
         .await;
         assert!(result.is_ok());
@@ -1875,7 +1969,7 @@ mod tests {
         let result = update_component_definition_by_id(
             State((logger, test_data_store())),
             Path(test_id.clone()),
-            Json(definition.clone()),
+            ComponentDefinitionExtractor(definition.clone()),
         )
         .await;
         assert!(result.is_ok());
@@ -2452,7 +2546,7 @@ mod tests {
         // Try to create again - should get CONFLICT
         let result = create_component_definition(
             State((logger.clone(), data_store.clone())),
-            Json(definition.clone()),
+            ComponentDefinitionExtractor(definition.clone()),
         )
         .await;
         assert!(result.is_err());
@@ -2527,7 +2621,7 @@ mod tests {
 
         let result = create_component_definition(
             State((logger.clone(), data_store.clone())),
-            Json(empty_schema_def.clone()),
+            ComponentDefinitionExtractor(empty_schema_def.clone()),
         )
         .await;
 
@@ -2617,7 +2711,7 @@ mod tests {
         // Test 201 Created for component definition
         let create_result = create_component_definition(
             State((logger.clone(), data_store.clone())),
-            Json(definition.clone()),
+            ComponentDefinitionExtractor(definition.clone()),
         )
         .await;
         assert!(create_result.is_ok()); // Should be 200 OK (returned as Json), not 201
@@ -2625,7 +2719,7 @@ mod tests {
         // Test 409 Conflict for duplicate creation
         let conflict_result = create_component_definition(
             State((logger.clone(), data_store.clone())),
-            Json(definition.clone()),
+            ComponentDefinitionExtractor(definition.clone()),
         )
         .await;
         assert!(conflict_result.is_err());
@@ -2638,7 +2732,7 @@ mod tests {
         let invalid_def = invalid_component_definition();
         let validation_result = create_component_definition(
             State((logger.clone(), data_store.clone())),
-            Json(invalid_def),
+            ComponentDefinitionExtractor(invalid_def),
         )
         .await;
         assert!(validation_result.is_err());
@@ -2691,7 +2785,7 @@ mod tests {
         // Create the component definition
         let create_result = create_component_definition(
             State((logger.clone(), data_store.clone())),
-            Json(definition.clone()),
+            ComponentDefinitionExtractor(definition.clone()),
         )
         .await;
         assert!(
@@ -2737,7 +2831,7 @@ mod tests {
         // First create the component definition
         let create_result = create_component_definition(
             State((logger.clone(), data_store.clone())),
-            Json(definition.clone()),
+            ComponentDefinitionExtractor(definition.clone()),
         )
         .await;
         assert!(

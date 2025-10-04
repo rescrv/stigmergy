@@ -4,7 +4,7 @@
 //! Handle<UserError> for consistent error property extraction.
 
 use super::errors::UserError;
-use crate::{EntityParseError, SystemIdParseError};
+use crate::EntityParseError;
 use handled::Handle;
 
 /// Implement Handle<UserError> for EntityParseError
@@ -30,39 +30,6 @@ impl Handle<UserError> for EntityParseError {
             EntityParseError::InvalidLength => (
                 "Entity ID must decode to exactly 32 bytes".to_string(),
                 Some("Entity IDs must be exactly 43 characters when base64 encoded".to_string()),
-            ),
-        };
-
-        Some(UserError {
-            message,
-            usage_hint: hint,
-        })
-    }
-}
-
-/// Implement Handle<UserError> for SystemIdParseError
-impl Handle<UserError> for SystemIdParseError {
-    fn handle(&self) -> Option<UserError> {
-        let (message, hint) = match self {
-            SystemIdParseError::InvalidPrefix => (
-                "System ID must start with 'system:' prefix or be a valid base64 string"
-                    .to_string(),
-                Some(
-                    "Use format 'system:BASE64_STRING' or just 'BASE64_STRING' (43 characters)"
-                        .to_string(),
-                ),
-            ),
-            SystemIdParseError::InvalidFormat => (
-                "System ID format is invalid - expected 43-character base64 string".to_string(),
-                Some("System IDs must be exactly 43 characters of URL-safe base64".to_string()),
-            ),
-            SystemIdParseError::InvalidBase64 => (
-                "System ID contains invalid base64 characters".to_string(),
-                Some("Use only URL-safe base64 characters (A-Z, a-z, 0-9, -, _)".to_string()),
-            ),
-            SystemIdParseError::InvalidLength => (
-                "System ID must decode to exactly 32 bytes".to_string(),
-                Some("System IDs must be exactly 43 characters when base64 encoded".to_string()),
             ),
         };
 
