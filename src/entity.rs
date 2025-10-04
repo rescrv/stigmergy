@@ -631,9 +631,9 @@ async fn delete_entity(
 
     // Parse the entity ID
     match Entity::from_str(&entity_string) {
-        Ok(_entity) => {
+        Ok(entity) => {
             // Attempt to delete from data store using the standardized operation
-            let result = DataStoreOperations::delete_entity(&*data_store, &entity_string);
+            let result = DataStoreOperations::delete_entity(&*data_store, &entity);
             let success = result.success && result.data.unwrap_or(false);
 
             let save_entry = SaveEntry::new(

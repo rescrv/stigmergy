@@ -388,7 +388,7 @@ async fn get_system(
         }
     };
 
-    match data_store.get_system(system_name.as_str()) {
+    match data_store.get_system(&system_name) {
         Ok(Some(system)) => {
             let log_entry = SaveEntry::new(
                 SaveOperation::SystemGet {
@@ -459,7 +459,7 @@ async fn update_system(
         }
     };
 
-    let old_system = match data_store.get_system(system_name.as_str()) {
+    let old_system = match data_store.get_system(&system_name) {
         Ok(Some(system)) => system,
         Ok(None) => {
             let log_entry = SaveEntry::new(
@@ -563,7 +563,7 @@ async fn patch_system(
         }
     };
 
-    let mut system = match data_store.get_system(system_name.as_str()) {
+    let mut system = match data_store.get_system(&system_name) {
         Ok(Some(system)) => system,
         Ok(None) => {
             let log_entry = SaveEntry::new(
@@ -703,7 +703,7 @@ async fn delete_system(
         }
     };
 
-    match data_store.delete_system(system_name.as_str()) {
+    match data_store.delete_system(&system_name) {
         Ok(true) => {
             let log_entry = SaveEntry::new(
                 SaveOperation::SystemDelete {

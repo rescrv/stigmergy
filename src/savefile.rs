@@ -47,7 +47,9 @@ use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 
-use crate::{ComponentDefinition, DataStore, DataStoreOperations, Entity, data_operations};
+use crate::{
+    Component, ComponentDefinition, DataStore, DataStoreOperations, Entity, data_operations,
+};
 
 /// A complete record of a single operation in the stigmergy system.
 ///
@@ -756,7 +758,13 @@ impl SavefileManager {
 
             SaveOperation::EntityDelete { entity_id, success } => {
                 if *success {
-                    let result = DataStoreOperations::delete_entity(data_store, entity_id);
+                    let entity = entity_id.parse::<Entity>().map_err(|_| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("invalid entity id: {}", entity_id),
+                        )
+                    })?;
+                    let result = DataStoreOperations::delete_entity(data_store, &entity);
                     if !result.success {
                         return Err(result.into_error().into());
                     }
@@ -765,10 +773,11 @@ impl SavefileManager {
             }
 
             SaveOperation::ComponentDefinitionCreate { definition, .. } => {
-                let def_id = format!("{:?}", definition.component);
                 // Create component definition - AlreadyExists is ok for replay, other errors fail
                 let result = data_operations::replay::create_component_definition(
-                    data_store, &def_id, definition,
+                    data_store,
+                    &definition.component,
+                    definition,
                 );
                 if !result.success {
                     // This is a real error (not AlreadyExists), so fail the restore
@@ -777,14 +786,10 @@ impl SavefileManager {
                 Ok(())
             }
 
-            SaveOperation::ComponentDefinitionUpdate {
-                definition_id,
-                new_definition,
-                ..
-            } => {
+            SaveOperation::ComponentDefinitionUpdate { new_definition, .. } => {
                 let result = DataStoreOperations::update_component_definition(
                     data_store,
-                    definition_id,
+                    &new_definition.component,
                     new_definition,
                 );
                 if !result.success {
@@ -794,8 +799,14 @@ impl SavefileManager {
             }
 
             SaveOperation::ComponentDefinitionDelete { definition_id, .. } => {
+                let component = Component::new(definition_id).ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("invalid component name: {}", definition_id),
+                    )
+                })?;
                 let result =
-                    DataStoreOperations::delete_component_definition(data_store, definition_id);
+                    DataStoreOperations::delete_component_definition(data_store, &component);
                 if !result.success {
                     return Err(result.into_error().into());
                 }
@@ -817,11 +828,17 @@ impl SavefileManager {
                 ..
             } => {
                 let entity = entity_id.parse::<Entity>()?;
+                let component = Component::new(component_id).ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("invalid component name: {}", component_id),
+                    )
+                })?;
                 // Create component - AlreadyExists is ok for replay, other errors fail
                 let result = data_operations::replay::create_component(
                     data_store,
                     &entity,
-                    component_id,
+                    &component,
                     component_data,
                 );
                 if !result.success {
@@ -838,11 +855,14 @@ impl SavefileManager {
                 ..
             } => {
                 let entity = entity_id.parse::<Entity>()?;
+                let component = Component::new(component_id).ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("invalid component name: {}", component_id),
+                    )
+                })?;
                 let result = DataStoreOperations::update_component(
-                    data_store,
-                    &entity,
-                    component_id,
-                    new_data,
+                    data_store, &entity, &component, new_data,
                 );
                 if !result.success {
                     return Err(result.into_error().into());
@@ -856,8 +876,13 @@ impl SavefileManager {
                 ..
             } => {
                 let entity = entity_id.parse::<Entity>()?;
-                let result =
-                    DataStoreOperations::delete_component(data_store, &entity, component_id);
+                let component = Component::new(component_id).ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("invalid component name: {}", component_id),
+                    )
+                })?;
+                let result = DataStoreOperations::delete_component(data_store, &entity, &component);
                 if !result.success {
                     return Err(result.into_error().into());
                 }
@@ -873,13 +898,11 @@ impl SavefileManager {
             }
 
             SaveOperation::ComponentDefinitionPatch {
-                definition_id,
-                result_definition,
-                ..
+                result_definition, ..
             } => {
                 let result = DataStoreOperations::update_component_definition(
                     data_store,
-                    definition_id,
+                    &result_definition.component,
                     result_definition,
                 );
                 if !result.success {
@@ -895,10 +918,16 @@ impl SavefileManager {
                 ..
             } => {
                 let entity = entity_id.parse::<Entity>()?;
+                let component = Component::new(component_id).ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("invalid component name: {}", component_id),
+                    )
+                })?;
                 let result = DataStoreOperations::update_component(
                     data_store,
                     &entity,
-                    component_id,
+                    &component,
                     result_data,
                 );
                 if !result.success {
@@ -1523,13 +1552,11 @@ mod tests {
         assert_eq!(result.skipped, 0);
 
         // Verify data was replayed correctly
-        let entity_id = entity.to_string();
-        assert!(data_store.get_entity(&entity_id).unwrap().is_some());
+        assert!(data_store.get_entity(&entity).unwrap().is_some());
 
-        let def_id = format!("{:?}", definition.component);
         assert!(
             data_store
-                .get_component_definition(&def_id)
+                .get_component_definition(&definition.component)
                 .unwrap()
                 .is_some()
         );
@@ -1621,7 +1648,7 @@ mod tests {
         let mut definition = ComponentDefinition::new(component.clone(), json!({"type": "string"}));
         let def_id = format!("{:?}", component);
         data_store
-            .create_component_definition(&def_id, &definition)
+            .create_component_definition(&component, &definition)
             .unwrap();
 
         // Create patch operation
@@ -1646,7 +1673,7 @@ mod tests {
 
         // Verify patch was applied
         let updated_def = data_store
-            .get_component_definition(&def_id)
+            .get_component_definition(&component)
             .unwrap()
             .unwrap();
         assert_eq!(updated_def.schema, json!({"type": "number"}));

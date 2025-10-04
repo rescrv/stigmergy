@@ -137,7 +137,7 @@ use crate::{
 /// assert!(Component::new("123Invalid").is_none());
 /// assert!(Component::new("").is_none());
 /// ```
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Component(String);
 
 impl Component {
@@ -584,9 +584,11 @@ async fn create_component_definition(
         }
     };
 
-    let def_id = definition.component.as_str().to_string();
-    let result =
-        DataStoreOperations::create_component_definition(&*data_store, &def_id, &definition);
+    let result = DataStoreOperations::create_component_definition(
+        &*data_store,
+        &definition.component,
+        &definition,
+    );
     if !result.success {
         let save_entry = SaveEntry::new(
             SaveOperation::ComponentDefinitionCreate {
@@ -636,9 +638,15 @@ async fn update_component_definition(
     };
 
     let def_id = definition.component.as_str().to_string();
-    let old_definition = data_store.get_component_definition(&def_id).ok().flatten();
-    let result =
-        DataStoreOperations::update_component_definition(&*data_store, &def_id, &definition);
+    let old_definition = data_store
+        .get_component_definition(&definition.component)
+        .ok()
+        .flatten();
+    let result = DataStoreOperations::update_component_definition(
+        &*data_store,
+        &definition.component,
+        &definition,
+    );
     if !result.success {
         let save_entry = SaveEntry::new(
             SaveOperation::ComponentDefinitionUpdate {
@@ -676,13 +684,13 @@ async fn patch_component_definition(
 ) -> Result<Json<ComponentDefinition>, (StatusCode, &'static str)> {
     let component = Component::new("PatchedComponent").unwrap();
     let definition = ComponentDefinition {
-        component,
+        component: component.clone(),
         schema: patch.clone(),
     };
 
     let def_id = "PatchedComponent".to_string();
     let result =
-        DataStoreOperations::update_component_definition(&*data_store, &def_id, &definition);
+        DataStoreOperations::update_component_definition(&*data_store, &component, &definition);
     if !result.success {
         let save_entry = SaveEntry::new(
             SaveOperation::ComponentDefinitionPatch {
@@ -737,7 +745,9 @@ async fn get_component_definition_by_id(
     State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
     Path(id): Path<String>,
 ) -> Result<Json<ComponentDefinition>, (StatusCode, &'static str)> {
-    let definition = match data_store.get_component_definition(&id) {
+    let component =
+        Component::new(&id).ok_or((StatusCode::BAD_REQUEST, "invalid component name"))?;
+    let definition = match data_store.get_component_definition(&component) {
         Ok(Some(def)) => def,
         Ok(None) | Err(_) => {
             let save_entry = SaveEntry::new(
@@ -769,6 +779,9 @@ async fn update_component_definition_by_id(
     Path(id): Path<String>,
     ComponentDefinitionExtractor(definition): ComponentDefinitionExtractor,
 ) -> Result<Json<ComponentDefinition>, (StatusCode, &'static str)> {
+    let component =
+        Component::new(&id).ok_or((StatusCode::BAD_REQUEST, "invalid component name"))?;
+
     let validation_result = match definition.validate_schema() {
         Ok(()) => LogValidationResult::success(),
         Err(e) => {
@@ -786,8 +799,12 @@ async fn update_component_definition_by_id(
         }
     };
 
-    let old_definition = data_store.get_component_definition(&id).ok().flatten();
-    let result = DataStoreOperations::update_component_definition(&*data_store, &id, &definition);
+    let old_definition = data_store
+        .get_component_definition(&component)
+        .ok()
+        .flatten();
+    let result =
+        DataStoreOperations::update_component_definition(&*data_store, &component, &definition);
     if !result.success {
         let save_entry = SaveEntry::new(
             SaveOperation::ComponentDefinitionUpdate {
@@ -824,11 +841,12 @@ async fn patch_component_definition_by_id(
     let component = Component::new(format!("Component{}", id))
         .unwrap_or_else(|| Component::new("PatchedComponent").unwrap());
     let definition = ComponentDefinition {
-        component,
+        component: component.clone(),
         schema: patch.clone(),
     };
 
-    let result = DataStoreOperations::update_component_definition(&*data_store, &id, &definition);
+    let result =
+        DataStoreOperations::update_component_definition(&*data_store, &component, &definition);
     if !result.success {
         let save_entry = SaveEntry::new(
             SaveOperation::ComponentDefinitionPatch {
@@ -859,8 +877,13 @@ async fn delete_component_definition_by_id(
     State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, &'static str)> {
-    let deleted_definition = data_store.get_component_definition(&id).ok().flatten();
-    let result = DataStoreOperations::delete_component_definition(&*data_store, &id);
+    let component =
+        Component::new(&id).ok_or((StatusCode::BAD_REQUEST, "invalid component name"))?;
+    let deleted_definition = data_store
+        .get_component_definition(&component)
+        .ok()
+        .flatten();
+    let result = DataStoreOperations::delete_component_definition(&*data_store, &component);
     if !result.success {
         let save_entry = SaveEntry::new(
             SaveOperation::ComponentDefinitionDelete {
@@ -900,10 +923,7 @@ async fn get_components_for_entity(
     let components = match data_store.list_components_for_entity(&entity) {
         Ok(comp_list) => comp_list
             .into_iter()
-            .filter_map(|(component_name, data)| {
-                Component::new(&component_name)
-                    .map(|component| ComponentListItem { component, data })
-            })
+            .map(|(component, data)| ComponentListItem { component, data })
             .collect(),
         Err(_) => vec![],
     };
@@ -1002,8 +1022,12 @@ async fn create_component_for_entity(
     };
 
     let component_id = request.component.as_str().to_string();
-    let result =
-        DataStoreOperations::create_component(&*data_store, &entity, &component_id, &request.data);
+    let result = DataStoreOperations::create_component(
+        &*data_store,
+        &entity,
+        &request.component,
+        &request.data,
+    );
     if !result.success {
         let save_entry = SaveEntry::new(
             SaveOperation::ComponentCreate {
@@ -1054,7 +1078,7 @@ async fn update_component_for_entity(
         Err(_) => return Err((StatusCode::BAD_REQUEST, "invalid entity id")),
     };
 
-    let component_id = "updated_id".to_string();
+    let component_id = Component::new("updated_id").unwrap();
     let old_data = data_store
         .get_component(&entity, &component_id)
         .ok()
@@ -1065,7 +1089,7 @@ async fn update_component_for_entity(
         let save_entry = SaveEntry::new(
             SaveOperation::ComponentUpdate {
                 entity_id: entity_id.clone(),
-                component_id: component_id.clone(),
+                component_id: component_id.as_str().to_string(),
                 old_data,
                 new_data: component.clone(),
                 validation_result: None,
@@ -1079,7 +1103,7 @@ async fn update_component_for_entity(
     let save_entry = SaveEntry::new(
         SaveOperation::ComponentUpdate {
             entity_id,
-            component_id,
+            component_id: component_id.as_str().to_string(),
             old_data,
             new_data: component.clone(),
             validation_result: None,
@@ -1103,14 +1127,14 @@ async fn patch_component_for_entity(
         Err(_) => return Err((StatusCode::BAD_REQUEST, "invalid entity id")),
     };
 
-    let component_id = "patched_id".to_string();
+    let component_id = Component::new("patched_id").unwrap();
     let result =
         DataStoreOperations::update_component(&*data_store, &entity, &component_id, &patch);
     if !result.success {
         let save_entry = SaveEntry::new(
             SaveOperation::ComponentPatch {
                 entity_id: entity_id.clone(),
-                component_id: component_id.clone(),
+                component_id: component_id.as_str().to_string(),
                 patch_data: patch.clone(),
                 result_data: patch.clone(),
             },
@@ -1123,7 +1147,7 @@ async fn patch_component_for_entity(
     let save_entry = SaveEntry::new(
         SaveOperation::ComponentPatch {
             entity_id,
-            component_id,
+            component_id: component_id.as_str().to_string(),
             patch_data: patch.clone(),
             result_data: patch.clone(),
         },
@@ -1177,7 +1201,9 @@ async fn get_component_by_id_for_entity(
         Err(_) => return Err((StatusCode::BAD_REQUEST, "invalid entity id")),
     };
 
-    let component = match data_store.get_component(&entity, &component_id) {
+    let component_type =
+        Component::new(&component_id).ok_or((StatusCode::BAD_REQUEST, "invalid component name"))?;
+    let component = match data_store.get_component(&entity, &component_type) {
         Ok(Some(data)) => data,
         Ok(None) | Err(_) => {
             let save_entry = SaveEntry::new(
@@ -1216,17 +1242,19 @@ async fn update_component_by_id_for_entity(
         Err(_) => return Err((StatusCode::BAD_REQUEST, "invalid entity id")),
     };
 
+    let component_type =
+        Component::new(&component_id).ok_or((StatusCode::BAD_REQUEST, "invalid component name"))?;
     let old_data = data_store
-        .get_component(&entity, &component_id)
+        .get_component(&entity, &component_type)
         .ok()
         .flatten();
     let result =
-        DataStoreOperations::update_component(&*data_store, &entity, &component_id, &component);
+        DataStoreOperations::update_component(&*data_store, &entity, &component_type, &component);
     if !result.success {
         let save_entry = SaveEntry::new(
             SaveOperation::ComponentUpdate {
                 entity_id: entity_id.clone(),
-                component_id: component_id.clone(),
+                component_id: component_id.as_str().to_string(),
                 old_data,
                 new_data: component.clone(),
                 validation_result: None,
@@ -1240,7 +1268,7 @@ async fn update_component_by_id_for_entity(
     let save_entry = SaveEntry::new(
         SaveOperation::ComponentUpdate {
             entity_id,
-            component_id,
+            component_id: component_id.as_str().to_string(),
             old_data,
             new_data: component.clone(),
             validation_result: None,
@@ -1264,6 +1292,8 @@ async fn patch_component_by_id_for_entity(
         Err(_) => return Err((StatusCode::BAD_REQUEST, "invalid entity id")),
     };
 
+    let component_type =
+        Component::new(&component_id).ok_or((StatusCode::BAD_REQUEST, "invalid component name"))?;
     let mut component = patch.clone();
     if let Some(obj) = component.as_object_mut() {
         obj.insert(
@@ -1273,12 +1303,12 @@ async fn patch_component_by_id_for_entity(
     }
 
     let result =
-        DataStoreOperations::update_component(&*data_store, &entity, &component_id, &component);
+        DataStoreOperations::update_component(&*data_store, &entity, &component_type, &component);
     if !result.success {
         let save_entry = SaveEntry::new(
             SaveOperation::ComponentPatch {
                 entity_id: entity_id.clone(),
-                component_id: component_id.clone(),
+                component_id: component_id.as_str().to_string(),
                 patch_data: patch,
                 result_data: component.clone(),
             },
@@ -1313,11 +1343,13 @@ async fn delete_component_by_id_for_entity(
         Err(_) => return Err((StatusCode::BAD_REQUEST, "invalid entity id")),
     };
 
+    let component_type =
+        Component::new(&component_id).ok_or((StatusCode::BAD_REQUEST, "invalid component name"))?;
     let deleted_data = data_store
-        .get_component(&entity, &component_id)
+        .get_component(&entity, &component_type)
         .ok()
         .flatten();
-    let result = DataStoreOperations::delete_component(&*data_store, &entity, &component_id);
+    let result = DataStoreOperations::delete_component(&*data_store, &entity, &component_type);
     if !result.success {
         let save_entry = SaveEntry::new(
             SaveOperation::ComponentDelete {
@@ -2536,11 +2568,10 @@ schema:
 
         let definition = sample_component_definition();
         let data_store = test_data_store();
-        let def_id = definition.component.as_str().to_string();
 
         // Create definition first
         data_store
-            .create_component_definition(&def_id, &definition)
+            .create_component_definition(&definition.component, &definition)
             .unwrap();
 
         // Try to create again - should get CONFLICT
@@ -2578,7 +2609,7 @@ schema:
 
         // Create component first (directly in data store)
         data_store
-            .create_component(&entity, test_component.as_str(), &component_data)
+            .create_component(&entity, &test_component, &component_data)
             .unwrap();
 
         // Try to create again via HTTP handler - should get CONFLICT
@@ -2661,7 +2692,7 @@ schema:
 
         // Create the definition first
         data_store
-            .create_component_definition("complex_def", &complex_definition)
+            .create_component_definition(&complex_definition.component, &complex_definition)
             .unwrap();
 
         // Create an entity to attach the component to

@@ -1925,9 +1925,8 @@ mod tests {
         ];
 
         for error in errors {
-            // Should be able to display and convert to user error
-            let _display = format!("{}", error);
-            let _user_error = error.handle();
+            assert!(!format!("{}", error).is_empty());
+            let _ = error.handle();
         }
     }
 

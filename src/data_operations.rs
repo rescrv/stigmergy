@@ -46,7 +46,7 @@
 //! assert!(!result2.success);
 //! ```
 
-use crate::{ComponentDefinition, DataStore, DataStoreError, Entity};
+use crate::{Component, ComponentDefinition, DataStore, DataStoreError, Entity};
 use serde_json::Value;
 
 /// Result of a data store operation with success/failure information.
@@ -200,8 +200,8 @@ impl DataStoreOperations {
     }
 
     /// Delete an entity from the data store
-    pub fn delete_entity(data_store: &dyn DataStore, entity_id: &str) -> OperationResult<bool> {
-        match data_store.delete_entity(entity_id) {
+    pub fn delete_entity(data_store: &dyn DataStore, entity: &Entity) -> OperationResult<bool> {
+        match data_store.delete_entity(entity) {
             Ok(deleted) => OperationResult::success(deleted),
             Err(e) => OperationResult::failure(e),
         }
@@ -210,10 +210,10 @@ impl DataStoreOperations {
     /// Create a component definition in the data store
     pub fn create_component_definition(
         data_store: &dyn DataStore,
-        def_id: &str,
+        component: &Component,
         definition: &ComponentDefinition,
     ) -> OperationResult<()> {
-        match data_store.create_component_definition(def_id, definition) {
+        match data_store.create_component_definition(component, definition) {
             Ok(()) => OperationResult::success_void(),
             Err(e) => OperationResult::failure(e),
         }
@@ -222,10 +222,10 @@ impl DataStoreOperations {
     /// Update a component definition in the data store
     pub fn update_component_definition(
         data_store: &dyn DataStore,
-        def_id: &str,
+        component: &Component,
         definition: &ComponentDefinition,
     ) -> OperationResult<bool> {
-        match data_store.update_component_definition(def_id, definition) {
+        match data_store.update_component_definition(component, definition) {
             Ok(updated) => OperationResult::success(updated),
             Err(e) => OperationResult::failure(e),
         }
@@ -234,9 +234,9 @@ impl DataStoreOperations {
     /// Delete a component definition from the data store
     pub fn delete_component_definition(
         data_store: &dyn DataStore,
-        def_id: &str,
+        component: &Component,
     ) -> OperationResult<bool> {
-        match data_store.delete_component_definition(def_id) {
+        match data_store.delete_component_definition(component) {
             Ok(deleted) => OperationResult::success(deleted),
             Err(e) => OperationResult::failure(e),
         }
@@ -254,10 +254,10 @@ impl DataStoreOperations {
     pub fn create_component(
         data_store: &dyn DataStore,
         entity: &Entity,
-        component_id: &str,
+        component: &Component,
         data: &Value,
     ) -> OperationResult<()> {
-        match data_store.create_component(entity, component_id, data) {
+        match data_store.create_component(entity, component, data) {
             Ok(()) => OperationResult::success_void(),
             Err(e) => OperationResult::failure(e),
         }
@@ -267,10 +267,10 @@ impl DataStoreOperations {
     pub fn update_component(
         data_store: &dyn DataStore,
         entity: &Entity,
-        component_id: &str,
+        component: &Component,
         data: &Value,
     ) -> OperationResult<bool> {
-        match data_store.update_component(entity, component_id, data) {
+        match data_store.update_component(entity, component, data) {
             Ok(updated) => OperationResult::success(updated),
             Err(e) => OperationResult::failure(e),
         }
@@ -280,9 +280,9 @@ impl DataStoreOperations {
     pub fn delete_component(
         data_store: &dyn DataStore,
         entity: &Entity,
-        component_id: &str,
+        component: &Component,
     ) -> OperationResult<bool> {
-        match data_store.delete_component(entity, component_id) {
+        match data_store.delete_component(entity, component) {
             Ok(deleted) => OperationResult::success(deleted),
             Err(e) => OperationResult::failure(e),
         }
@@ -323,10 +323,10 @@ pub mod replay {
 
     pub fn create_component_definition(
         data_store: &dyn DataStore,
-        def_id: &str,
+        component: &Component,
         definition: &ComponentDefinition,
     ) -> OperationResult<bool> {
-        match data_store.create_component_definition(def_id, definition) {
+        match data_store.create_component_definition(component, definition) {
             Ok(()) => OperationResult::success(true), // Created new
             Err(DataStoreError::AlreadyExists) => OperationResult::success(false), // Already existed
             Err(e) => OperationResult::failure(e),                                 // Real error
@@ -336,10 +336,10 @@ pub mod replay {
     pub fn create_component(
         data_store: &dyn DataStore,
         entity: &Entity,
-        component_id: &str,
+        component: &Component,
         data: &Value,
     ) -> OperationResult<bool> {
-        match data_store.create_component(entity, component_id, data) {
+        match data_store.create_component(entity, component, data) {
             Ok(()) => OperationResult::success(true), // Created new
             Err(DataStoreError::AlreadyExists) => OperationResult::success(false), // Already existed
             Err(e) => OperationResult::failure(e),                                 // Real error
