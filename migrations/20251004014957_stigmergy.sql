@@ -92,25 +92,3 @@ CREATE TABLE invariants (
     -- Ensures that the invariant_id is exactly 32 bytes long.
     CONSTRAINT invariant_id_length CHECK (octet_length(invariant_id) = 32)
 );
-
--- The `messages` table stores messages associated with a specific component of an entity.
--- These messages can be used for communication, logging, or debugging purposes.
-CREATE TABLE messages (
-    -- A foreign key referencing the `entity_id` in the `entities` table.
-    entity_id BYTEA NOT NULL REFERENCES entities(entity_id) ON DELETE CASCADE,
-    -- A foreign key referencing the `component_name` in the `component_definitions` table.
-    component_name VARCHAR(255) NOT NULL REFERENCES component_definitions(component_name) ON DELETE CASCADE,
-    -- A serial number for the message, ensuring chronological order for a given component.
-    serial BIGINT NOT NULL,
-    -- The role of the sender of the message (e.g., "user", "system").
-    role VARCHAR(255) NOT NULL,
-    -- The content of the message.
-    message TEXT NOT NULL,
-    -- The timestamp when the message was created.
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    -- The timestamp when the message was last updated.
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    -- The primary key is a composite of `entity_id`, `component_name`, and `serial`,
-    -- uniquely identifying each message.
-    PRIMARY KEY (entity_id, component_name, serial)
-);
