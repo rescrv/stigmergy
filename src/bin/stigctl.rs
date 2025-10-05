@@ -41,7 +41,7 @@ Commands:
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (options, free) = Options::from_command_line("USAGE: stigctl <command> [args...]");
+    let (options, free) = Options::from_command_line_relaxed("USAGE: stigctl <command> [args...]");
 
     if free.is_empty() {
         cli_utils::exit_with_usage_error("No command specified", USAGE);

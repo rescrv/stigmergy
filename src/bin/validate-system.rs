@@ -14,7 +14,7 @@ struct Options {
 
 fn main() {
     let (options, free) =
-        Options::from_command_line("USAGE: validate-system [--verbose] <file>...");
+        Options::from_command_line_relaxed("USAGE: validate-system [--verbose] <file>...");
 
     if free.is_empty() {
         process::exit(1);
