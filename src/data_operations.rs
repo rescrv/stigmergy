@@ -31,18 +31,23 @@
 //! ### Standard Operations
 //!
 //! ```rust
-//! use stigmergy::{DataStoreOperations, InMemoryDataStore, Entity};
+//! use stigmergy::{DataStoreOperations, InMemoryDataStore, Component, ComponentDefinition};
+//! use serde_json::json;
 //! use std::sync::Arc;
 //!
 //! let store = Arc::new(InMemoryDataStore::new());
-//! let entity = Entity::new([1u8; 32]);
+//! let component = Component::new("Health").unwrap();
+//! let definition = ComponentDefinition::new(
+//!     component.clone(),
+//!     json!({"type": "object", "properties": {"hp": {"type": "integer"}}})
+//! );
 //!
-//! // Create entity - will fail if already exists
-//! let result = DataStoreOperations::create_entity(&*store, &entity);
+//! // Create component definition - will fail if already exists
+//! let result = DataStoreOperations::create_component_definition(&*store, &component, &definition);
 //! assert!(result.success);
 //!
 //! // Try to create again - will fail
-//! let result2 = DataStoreOperations::create_entity(&*store, &entity);
+//! let result2 = DataStoreOperations::create_component_definition(&*store, &component, &definition);
 //! assert!(!result2.success);
 //! ```
 
@@ -191,22 +196,6 @@ impl<T> OperationResult<T> {
 pub struct DataStoreOperations;
 
 impl DataStoreOperations {
-    /// Create an entity in the data store
-    pub fn create_entity(data_store: &dyn DataStore, entity: &Entity) -> OperationResult<()> {
-        match data_store.create_entity(entity) {
-            Ok(()) => OperationResult::success_void(),
-            Err(e) => OperationResult::failure(e),
-        }
-    }
-
-    /// Delete an entity from the data store
-    pub fn delete_entity(data_store: &dyn DataStore, entity: &Entity) -> OperationResult<bool> {
-        match data_store.delete_entity(entity) {
-            Ok(deleted) => OperationResult::success(deleted),
-            Err(e) => OperationResult::failure(e),
-        }
-    }
-
     /// Create a component definition in the data store
     pub fn create_component_definition(
         data_store: &dyn DataStore,
@@ -311,15 +300,6 @@ impl DataStoreOperations {
 /// Create operations for replay - return results that let caller handle AlreadyExists policy
 pub mod replay {
     use super::*;
-
-    /// Creates an entity, returning a result that indicates if the error was AlreadyExists
-    pub fn create_entity(data_store: &dyn DataStore, entity: &Entity) -> OperationResult<bool> {
-        match data_store.create_entity(entity) {
-            Ok(()) => OperationResult::success(true), // Created new
-            Err(DataStoreError::AlreadyExists) => OperationResult::success(false), // Already existed
-            Err(e) => OperationResult::failure(e),                                 // Real error
-        }
-    }
 
     pub fn create_component_definition(
         data_store: &dyn DataStore,

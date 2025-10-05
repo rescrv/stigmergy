@@ -2166,9 +2166,6 @@ schema:
         let entity = Entity::random().unwrap();
         let data_store = test_data_store();
 
-        // Create the entity first
-        data_store.create_entity(&entity).unwrap();
-
         let request = CreateComponentRequest {
             component: Component::new("TestComponent").unwrap(),
             data: component_data.clone(),
@@ -2603,9 +2600,7 @@ schema:
         let data_store = test_data_store();
         let test_component = Component::new("TestComponent").unwrap();
 
-        // Create an entity first
         let entity = Entity::random().unwrap();
-        data_store.create_entity(&entity).unwrap();
 
         // Create component first (directly in data store)
         data_store
@@ -2698,9 +2693,6 @@ schema:
         // Create an entity to attach the component to
         let entity = Entity::random().unwrap();
         let entity_id = entity.base64_part();
-
-        // Create the entity first
-        data_store.create_entity(&entity).unwrap();
 
         // Test with valid component data
         let valid_data = serde_json::json!({

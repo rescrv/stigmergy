@@ -396,6 +396,13 @@ pub enum BidParseError {
         /// Where the error was detected
         position: Position,
     },
+    /// Invalid escape sequence in string literal
+    InvalidEscapeSequence {
+        /// The invalid escape character
+        character: char,
+        /// Where the error occurred
+        position: Position,
+    },
 }
 
 impl fmt::Display for BidParseError {
@@ -432,6 +439,16 @@ impl fmt::Display for BidParseError {
             }
             BidParseError::EmptyExpression { position } => {
                 write!(f, "Empty expression at {}", position)
+            }
+            BidParseError::InvalidEscapeSequence {
+                character,
+                position,
+            } => {
+                write!(
+                    f,
+                    "Invalid escape sequence '\\{}' at {}",
+                    character, position
+                )
             }
         }
     }
@@ -500,6 +517,13 @@ impl Handle<UserError> for BidParseError {
             BidParseError::EmptyExpression { position } => (
                 format!("Empty expression at {}", position),
                 Some("Expressions cannot be empty".to_string()),
+            ),
+            BidParseError::InvalidEscapeSequence {
+                character,
+                position,
+            } => (
+                format!("Invalid escape sequence '\\{}' at {}", character, position),
+                Some("Valid escape sequences are: \\n \\t \\r \\\\ \\\"".to_string()),
             ),
         };
 
@@ -781,6 +805,7 @@ impl Lexer {
                     position: start_position,
                 });
             } else if ch == '\\' {
+                let escape_position = self.current_position();
                 self.advance();
                 match self.current_char() {
                     Some('n') => {
@@ -804,10 +829,10 @@ impl Lexer {
                         self.advance();
                     }
                     Some(escape_ch) => {
-                        // TODO(claude): Consider returning an error for unknown escape sequences
-                        // instead of silently accepting them. This could help catch user errors.
-                        value.push(escape_ch);
-                        self.advance();
+                        return Err(BidParseError::InvalidEscapeSequence {
+                            character: escape_ch,
+                            position: escape_position,
+                        });
                     }
                     None => break,
                 }
@@ -1602,14 +1627,11 @@ mod tests {
 
     #[test]
     fn string_unknown_escape() {
-        let result = BidParser::parse(r#"ON "hello\x" BID 42"#).unwrap();
-
-        if let Expression::StringLiteral { value, .. } = result.on_condition {
-            // Unknown escapes are kept as-is
-            assert_eq!(value, "hellox");
-        } else {
-            panic!("Expected string literal");
-        }
+        let result = BidParser::parse(r#"ON "hello\x" BID 42"#);
+        assert!(matches!(
+            result,
+            Err(BidParseError::InvalidEscapeSequence { character: 'x', .. })
+        ));
     }
 
     #[test]
@@ -2040,15 +2062,11 @@ mod tests {
 
     #[test]
     fn string_with_null_bytes() {
-        // Test string containing null bytes (if supported by lexer)
-        let result = BidParser::parse("ON \"hello\\0world\" BID 42").unwrap();
-
-        if let Expression::StringLiteral { value, .. } = result.on_condition {
-            // Our lexer treats unknown escapes as literal characters
-            assert_eq!(value, "hello0world");
-        } else {
-            panic!("Expected string literal with null byte");
-        }
+        let result = BidParser::parse("ON \"hello\\0world\" BID 42");
+        assert!(matches!(
+            result,
+            Err(BidParseError::InvalidEscapeSequence { character: '0', .. })
+        ));
     }
 
     #[test]
@@ -2603,10 +2621,7 @@ mod tests {
             assert!(result.is_err(), "Input '{}' should fail", input);
 
             let error_msg = format!("{}", result.unwrap_err());
-            println!(
-                "TODO(claude): cleanup this output; Error for '{}': {}",
-                input, error_msg
-            );
+            println!("Error for '{}': {}", input, error_msg);
 
             // Basic check that error message contains expected content
             // This is a simple check; in practice you'd want more specific assertions

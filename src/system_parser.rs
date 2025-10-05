@@ -1011,7 +1011,7 @@ tools: Read
 model: inherit
 color: green
 bid:
-- ON email ~= ".*@company\.com" BID company_bonus
+- ON email ~= ".*@company\\.com" BID company_bonus
 - ON product_code ~= "ELEC-[0-9]+" BID electronics_bonus
 - ON description ~= "(?i)special.*offer" BID special_offer_bonus
 ---

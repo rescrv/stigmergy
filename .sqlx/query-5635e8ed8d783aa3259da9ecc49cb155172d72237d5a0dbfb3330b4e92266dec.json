@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE entities\n        SET updated_at = CURRENT_TIMESTAMP\n        WHERE entity_id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5635e8ed8d783aa3259da9ecc49cb155172d72237d5a0dbfb3330b4e92266dec"
+}

@@ -104,16 +104,6 @@ async fn apply_save_entry(
         .map_err(|e| format!("Failed to parse JSON at line {}: {}", line_num, e))?;
 
     match &save_entry.operation {
-        SaveOperation::EntityCreate { entity, .. } => {
-            let url = format!("{}/api/v1/entity", base_url);
-            let response = client.post(&url).json(entity).send().await?;
-            handle_response(response, "EntityCreate").await?;
-        }
-        SaveOperation::EntityDelete { entity_id, .. } => {
-            let url = format!("{}/api/v1/entity/{}", base_url, entity_id);
-            let response = client.delete(&url).send().await?;
-            handle_response(response, "EntityDelete").await?;
-        }
         SaveOperation::ComponentDefinitionCreate { definition, .. } => {
             let url = format!("{}/api/v1/componentdefinition", base_url);
             let response = client.post(&url).json(definition).send().await?;

@@ -35,7 +35,7 @@
 //!
 //! // Create and log an operation
 //! let entity = Entity::new([1u8; 32]);
-//! let operation = SaveOperation::EntityCreate { entity, was_random: false };
+//! let operation = SaveOperation::ComponentDefinitionCreate { definition, validation_result: ValidationResult::success() };
 //! let entry = SaveEntry::new(operation, SaveMetadata::system());
 //! manager.save_or_error(&entry);
 //! ```
@@ -78,23 +78,6 @@ pub struct SaveEntry {
 /// data needed to understand and potentially replay the operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SaveOperation {
-    // Entity operations
-    /// An entity was created in the system.
-    EntityCreate {
-        /// The entity that was created
-        entity: Entity,
-        /// Whether the entity ID was randomly generated
-        was_random: bool,
-    },
-
-    /// An entity was deleted from the system.
-    EntityDelete {
-        /// The ID string of the entity that was deleted
-        entity_id: String,
-        /// Whether the deletion was successful
-        success: bool,
-    },
-
     // Component Definition operations
     /// A component definition was created.
     ComponentDefinitionCreate {
@@ -374,8 +357,6 @@ impl SaveEntry {
     /// Returns the operation type as a string for filtering and indexing
     pub fn operation_type(&self) -> &'static str {
         match &self.operation {
-            SaveOperation::EntityCreate { .. } => "EntityCreate",
-            SaveOperation::EntityDelete { .. } => "EntityDelete",
             SaveOperation::ComponentDefinitionCreate { .. } => "ComponentDefinitionCreate",
             SaveOperation::ComponentDefinitionUpdate { .. } => "ComponentDefinitionUpdate",
             SaveOperation::ComponentDefinitionPatch { .. } => "ComponentDefinitionPatch",
@@ -407,15 +388,6 @@ impl SaveEntry {
     /// Returns true if the operation failed
     pub fn is_failure(&self) -> bool {
         matches!(self.metadata.status, OperationStatus::Failed)
-    }
-
-    /// Returns the entity ID if this operation involves an entity
-    pub fn entity_id(&self) -> Option<String> {
-        match &self.operation {
-            SaveOperation::EntityCreate { entity, .. } => Some(entity.to_string()),
-            SaveOperation::EntityDelete { entity_id, .. } => Some(entity_id.clone()),
-            _ => None,
-        }
     }
 
     /// Returns the component definition ID if this operation involves a component definition
@@ -566,46 +538,6 @@ impl ValidationResult {
     }
 }
 
-/// Convenience macros for creating save entries
-#[macro_export]
-macro_rules! save_entity_create {
-    ($entity:expr, $was_random:expr) => {
-        $crate::SaveEntry::new(
-            $crate::SaveOperation::EntityCreate {
-                entity: $entity,
-                was_random: $was_random,
-            },
-            $crate::SaveMetadata::rest_api(None),
-        )
-    };
-}
-
-#[macro_export]
-/// Create a SaveEntry for an entity deletion operation.
-///
-/// # Arguments
-///
-/// * `entity_id` - The entity ID that was deleted
-/// * `success` - Whether the deletion was successful
-///
-/// # Examples
-///
-/// ```rust
-/// # use stigmergy::save_entity_delete;
-/// let log_entry = save_entity_delete!("entity:ABC123", true);
-/// ```
-macro_rules! save_entity_delete {
-    ($entity_id:expr, $success:expr) => {
-        $crate::SaveEntry::new(
-            $crate::SaveOperation::EntityDelete {
-                entity_id: $entity_id.to_string(),
-                success: $success,
-            },
-            $crate::SaveMetadata::rest_api(None),
-        )
-    };
-}
-
 #[macro_export]
 /// Create a SaveEntry for a component creation operation.
 ///
@@ -744,34 +676,6 @@ impl SavefileManager {
         data_store: &dyn DataStore,
     ) -> Result<(), Box<dyn std::error::Error>> {
         match &entry.operation {
-            SaveOperation::EntityCreate { entity, .. } => {
-                // Create entity - AlreadyExists is ok for restore, other errors fail
-                let result = data_operations::replay::create_entity(data_store, entity);
-                if !result.success {
-                    // This is a real error (not AlreadyExists), so fail the restore
-                    return Err(result.into_error().into());
-                }
-                // result.data indicates if entity was created (true) or already existed (false)
-                // Both are acceptable for restore
-                Ok(())
-            }
-
-            SaveOperation::EntityDelete { entity_id, success } => {
-                if *success {
-                    let entity = entity_id.parse::<Entity>().map_err(|_| {
-                        std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            format!("invalid entity id: {}", entity_id),
-                        )
-                    })?;
-                    let result = DataStoreOperations::delete_entity(data_store, &entity);
-                    if !result.success {
-                        return Err(result.into_error().into());
-                    }
-                }
-                Ok(())
-            }
-
             SaveOperation::ComponentDefinitionCreate { definition, .. } => {
                 // Create component definition - AlreadyExists is ok for replay, other errors fail
                 let result = data_operations::replay::create_component_definition(
@@ -1015,7 +919,6 @@ impl std::fmt::Display for RestoreResult {
 mod tests {
     use super::*;
     use crate::Component;
-    use chrono::{TimeZone, Utc};
     use serde_json::json;
 
     fn test_entity() -> Entity {
@@ -1028,58 +931,6 @@ mod tests {
 
     fn test_component_definition() -> ComponentDefinition {
         ComponentDefinition::new(test_component(), json!({"type": "string"}))
-    }
-
-    #[test]
-    fn save_entry_creation() {
-        let operation = SaveOperation::EntityCreate {
-            entity: test_entity(),
-            was_random: true,
-        };
-        let metadata = SaveMetadata::rest_api(Some("req_123".to_string()));
-        let entry = SaveEntry::new(operation, metadata);
-
-        assert!(!entry.id.is_empty());
-        assert!(entry.id.starts_with("save_"));
-        assert_eq!(entry.operation_type(), "EntityCreate");
-        assert!(entry.is_success());
-        assert!(!entry.is_failure());
-    }
-
-    #[test]
-    fn save_entry_with_timestamp() {
-        let timestamp = Utc.with_ymd_and_hms(2023, 1, 1, 12, 0, 0).unwrap();
-        let operation = SaveOperation::EntityDelete {
-            entity_id: "entity_123".to_string(),
-            success: true,
-        };
-        let metadata = SaveMetadata::internal(Some("system".to_string()));
-        let entry = SaveEntry::with_timestamp(operation, metadata, timestamp);
-
-        assert_eq!(entry.timestamp, timestamp);
-        assert_eq!(entry.operation_type(), "EntityDelete");
-    }
-
-    #[test]
-    fn entity_operations() {
-        let entity = test_entity();
-        let entity_id = entity.to_string();
-
-        let create_op = SaveOperation::EntityCreate {
-            entity,
-            was_random: false,
-        };
-        let create_entry = SaveEntry::new(create_op, SaveMetadata::rest_api(None));
-        assert_eq!(create_entry.operation_type(), "EntityCreate");
-        assert_eq!(create_entry.entity_id(), Some(entity_id.clone()));
-
-        let delete_op = SaveOperation::EntityDelete {
-            entity_id: entity_id.clone(),
-            success: true,
-        };
-        let delete_entry = SaveEntry::new(delete_op, SaveMetadata::rest_api(None));
-        assert_eq!(delete_entry.operation_type(), "EntityDelete");
-        assert_eq!(delete_entry.entity_id(), Some(entity_id));
     }
 
     #[test]
@@ -1277,13 +1128,6 @@ mod tests {
 
     #[test]
     fn macro_usage() {
-        let entity = test_entity();
-        let create_log = save_entity_create!(entity, true);
-        assert_eq!(create_log.operation_type(), "EntityCreate");
-
-        let delete_log = save_entity_delete!("entity_456", false);
-        assert_eq!(delete_log.operation_type(), "EntityDelete");
-
         let component_log = save_component_create!(
             "entity:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "comp_789",
@@ -1296,9 +1140,9 @@ mod tests {
     #[test]
     fn operation_status_checks() {
         let success_entry = SaveEntry::new(
-            SaveOperation::EntityCreate {
-                entity: test_entity(),
-                was_random: false,
+            SaveOperation::ComponentDefinitionCreate {
+                definition: test_component_definition(),
+                validation_result: ValidationResult::success(),
             },
             SaveMetadata::rest_api(None),
         );
@@ -1306,9 +1150,9 @@ mod tests {
         assert!(!success_entry.is_failure());
 
         let failed_entry = SaveEntry::new(
-            SaveOperation::EntityDelete {
-                entity_id: "bad_id".to_string(),
-                success: false,
+            SaveOperation::ComponentDefinitionDelete {
+                definition_id: "bad_id".to_string(),
+                deleted_definition: None,
             },
             SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
         );
@@ -1318,20 +1162,6 @@ mod tests {
 
     #[test]
     fn id_extraction_methods() {
-        let entity = test_entity();
-        let entity_id = entity.to_string();
-
-        let entity_entry = SaveEntry::new(
-            SaveOperation::EntityCreate {
-                entity,
-                was_random: false,
-            },
-            SaveMetadata::rest_api(None),
-        );
-        assert_eq!(entity_entry.entity_id(), Some(entity_id));
-        assert_eq!(entity_entry.component_definition_id(), None);
-        assert_eq!(entity_entry.component_id(), None);
-
         let comp_def_entry = SaveEntry::new(
             SaveOperation::ComponentDefinitionUpdate {
                 definition_id: "def_123".to_string(),
@@ -1341,7 +1171,6 @@ mod tests {
             },
             SaveMetadata::rest_api(None),
         );
-        assert_eq!(comp_def_entry.entity_id(), None);
         assert_eq!(
             comp_def_entry.component_definition_id(),
             Some("def_123".to_string())
@@ -1357,7 +1186,6 @@ mod tests {
             },
             SaveMetadata::rest_api(None),
         );
-        assert_eq!(comp_entry.entity_id(), None);
         assert_eq!(comp_entry.component_definition_id(), None);
         assert_eq!(comp_entry.component_id(), Some("comp_456".to_string()));
     }
@@ -1394,9 +1222,9 @@ mod tests {
         for status in statuses {
             let metadata = SaveMetadata::rest_api(None).with_status(status);
             let entry = SaveEntry::new(
-                SaveOperation::EntityCreate {
-                    entity: test_entity(),
-                    was_random: false,
+                SaveOperation::ComponentDefinitionCreate {
+                    definition: test_component_definition(),
+                    validation_result: ValidationResult::success(),
                 },
                 metadata,
             );
@@ -1427,9 +1255,9 @@ mod tests {
         ));
 
         let logger = SavefileManager::new(test_path.clone());
-        let operation = SaveOperation::EntityCreate {
-            entity: test_entity(),
-            was_random: true,
+        let operation = SaveOperation::ComponentDefinitionCreate {
+            definition: test_component_definition(),
+            validation_result: ValidationResult::success(),
         };
         let metadata = SaveMetadata::rest_api(Some("test_request".to_string()));
         let entry = SaveEntry::new(operation, metadata);
@@ -1438,7 +1266,7 @@ mod tests {
 
         let contents = fs::read_to_string(&test_path).expect("Failed to read log file");
         assert!(!contents.is_empty());
-        assert!(contents.contains("EntityCreate"));
+        assert!(contents.contains("ComponentDefinitionCreate"));
         assert!(contents.contains("test_request"));
 
         fs::remove_file(test_path).ok();
@@ -1463,21 +1291,24 @@ mod tests {
         let logger = SavefileManager::new(test_path.clone());
 
         // Create multiple log entries
-        let entity1 = test_entity();
-        let entity2 = Entity::new([2u8; 32]);
+        let def1 = test_component_definition();
+        let def2 = ComponentDefinition::new(
+            Component::new("AnotherComponent").unwrap(),
+            json!({"type": "number"}),
+        );
 
         let entry1 = SaveEntry::new(
-            SaveOperation::EntityCreate {
-                entity: entity1,
-                was_random: false,
+            SaveOperation::ComponentDefinitionCreate {
+                definition: def1,
+                validation_result: ValidationResult::success(),
             },
             SaveMetadata::rest_api(None).with_status(OperationStatus::Success),
         );
 
         let entry2 = SaveEntry::new(
-            SaveOperation::EntityCreate {
-                entity: entity2,
-                was_random: true,
+            SaveOperation::ComponentDefinitionCreate {
+                definition: def2,
+                validation_result: ValidationResult::success(),
             },
             SaveMetadata::rest_api(None).with_status(OperationStatus::Success),
         );
@@ -1489,8 +1320,14 @@ mod tests {
         let read_entries = logger.load_entries().expect("Failed to read log entries");
         assert_eq!(read_entries.len(), 2);
 
-        assert_eq!(read_entries[0].operation_type(), "EntityCreate");
-        assert_eq!(read_entries[1].operation_type(), "EntityCreate");
+        assert_eq!(
+            read_entries[0].operation_type(),
+            "ComponentDefinitionCreate"
+        );
+        assert_eq!(
+            read_entries[1].operation_type(),
+            "ComponentDefinitionCreate"
+        );
 
         fs::remove_file(test_path).ok();
     }
@@ -1517,25 +1354,15 @@ mod tests {
         let data_store = Arc::new(InMemoryDataStore::new());
 
         // Create log entries for various operations
-        let entity = test_entity();
         let definition = test_component_definition();
 
-        let entries = vec![
-            SaveEntry::new(
-                SaveOperation::EntityCreate {
-                    entity,
-                    was_random: false,
-                },
-                SaveMetadata::rest_api(None).with_status(OperationStatus::Success),
-            ),
-            SaveEntry::new(
-                SaveOperation::ComponentDefinitionCreate {
-                    definition: definition.clone(),
-                    validation_result: ValidationResult::Success,
-                },
-                SaveMetadata::rest_api(None).with_status(OperationStatus::Success),
-            ),
-        ];
+        let entries = vec![SaveEntry::new(
+            SaveOperation::ComponentDefinitionCreate {
+                definition: definition.clone(),
+                validation_result: ValidationResult::Success,
+            },
+            SaveMetadata::rest_api(None).with_status(OperationStatus::Success),
+        )];
 
         // Write entries to log
         for entry in &entries {
@@ -1547,12 +1374,11 @@ mod tests {
             .restore_to_store(&*data_store)
             .expect("Failed to replay log");
 
-        assert_eq!(result.successful, 2);
+        assert_eq!(result.successful, 1);
         assert_eq!(result.failed, 0);
         assert_eq!(result.skipped, 0);
 
         // Verify data was replayed correctly
-        assert!(data_store.get_entity(&entity).unwrap().is_some());
 
         assert!(
             data_store
@@ -1585,22 +1411,22 @@ mod tests {
         let logger = SavefileManager::new(test_path.clone());
         let data_store = Arc::new(InMemoryDataStore::new());
 
-        let entity = test_entity();
+        let definition = test_component_definition();
 
         let entries = vec![
             // Successful operation
             SaveEntry::new(
-                SaveOperation::EntityCreate {
-                    entity,
-                    was_random: false,
+                SaveOperation::ComponentDefinitionCreate {
+                    definition,
+                    validation_result: ValidationResult::success(),
                 },
                 SaveMetadata::rest_api(None).with_status(OperationStatus::Success),
             ),
             // Failed operation - should be skipped
             SaveEntry::new(
-                SaveOperation::EntityDelete {
-                    entity_id: "invalid_entity".to_string(),
-                    success: false,
+                SaveOperation::ComponentDefinitionDelete {
+                    definition_id: "invalid_component".to_string(),
+                    deleted_definition: None,
                 },
                 SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
             ),

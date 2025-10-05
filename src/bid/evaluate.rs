@@ -723,7 +723,7 @@ mod tests {
 
     #[test]
     fn regex_match_simple_pattern() {
-        let bid = BidParser::parse(r#"ON email ~= "@.*\.com$" BID valid"#).unwrap();
+        let bid = BidParser::parse(r#"ON email ~= "@.*\\.com$" BID valid"#).unwrap();
         let data = json!({
             "email": "user@example.com",
             "valid": true

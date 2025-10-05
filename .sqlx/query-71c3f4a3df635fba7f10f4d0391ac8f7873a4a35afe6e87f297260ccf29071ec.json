@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        DELETE FROM entities\n        WHERE entity_id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "71c3f4a3df635fba7f10f4d0391ac8f7873a4a35afe6e87f297260ccf29071ec"
+}

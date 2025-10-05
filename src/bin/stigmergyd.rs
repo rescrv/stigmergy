@@ -8,8 +8,7 @@ use tokio::net::TcpListener;
 use tokio::signal;
 
 use stigmergy::{
-    InMemoryDataStore, SavefileManager, create_component_router, create_entity_router,
-    create_system_router,
+    InMemoryDataStore, SavefileManager, create_component_router, create_system_router,
 };
 
 #[derive(CommandLine, Default, PartialEq, Eq)]
@@ -100,12 +99,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Create routers
-    let entity_router = create_entity_router(logger.clone(), data_store.clone());
+    // TODO: Entity router now requires PostgreSQL connection pool
+    // let entity_router = create_entity_router(pool);
     let component_router = create_component_router(logger.clone(), data_store.clone());
     let system_router = create_system_router(logger.clone(), data_store.clone());
 
     let app = Router::new()
-        .nest("/api/v1", entity_router)
+        // .nest("/api/v1", entity_router)
         .nest("/api/v1", component_router)
         .nest("/api/v1", system_router);
 

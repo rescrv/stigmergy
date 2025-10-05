@@ -161,17 +161,17 @@
 //! // Create a component definition
 //! let component = Component::new("Health").unwrap();
 //! let definition = ComponentDefinition::new(
-//!     component,
+//!     component.clone(),
 //!     json!({"type": "object", "properties": {"hp": {"type": "integer"}}})
 //! );
-//! data_store.create_component_definition("Health", &definition).unwrap();
+//! data_store.create_component_definition(&component, &definition).unwrap();
 //!
 //! // Attach component data to the entity
 //! let health_data = json!({"hp": 100});
-//! data_store.create_component(&entity, "Health", &health_data).unwrap();
+//! data_store.create_component(&entity, &component, &health_data).unwrap();
 //!
 //! // Retrieve the component
-//! let retrieved = data_store.get_component(&entity, "Health").unwrap();
+//! let retrieved = data_store.get_component(&entity, &component).unwrap();
 //! assert_eq!(retrieved, Some(health_data));
 //! ```
 
@@ -188,7 +188,13 @@ mod system_parser;
 mod test_utils;
 mod validate;
 
-// CLI utility modules
+// Public modules
+
+/// PostgreSQL database operations for stigmergy.
+///
+/// This module provides functions for interacting with the PostgreSQL database,
+/// including entity management with automatic timestamp tracking.
+pub mod sql;
 
 /// Command-line interface utilities for program termination and output formatting.
 ///
