@@ -178,6 +178,7 @@
 #![deny(missing_docs)]
 mod bid;
 mod component;
+mod component_definition;
 mod data_operations;
 mod data_store;
 mod entity;
@@ -222,9 +223,10 @@ pub mod http_utils;
 
 pub use bid::{Bid, BidParseError, BidParser, BinaryOperator, Expression, Position, UnaryOperator};
 pub use component::{
-    Component, ComponentDefinition, ComponentListItem, CreateComponentRequest,
-    CreateComponentResponse, create_component_router,
+    Component, ComponentListItem, CreateComponentRequest, CreateComponentResponse,
+    create_component_instance_router,
 };
+pub use component_definition::{ComponentDefinition, create_component_definition_router};
 pub use data_operations::{DataStoreOperations, OperationResult};
 pub use data_store::{ComponentList, DataStore, DataStoreError, InMemoryDataStore};
 pub use entity::{

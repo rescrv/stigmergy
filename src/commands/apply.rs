@@ -104,39 +104,6 @@ async fn apply_save_entry(
         .map_err(|e| format!("Failed to parse JSON at line {}: {}", line_num, e))?;
 
     match &save_entry.operation {
-        SaveOperation::ComponentDefinitionCreate { definition, .. } => {
-            let url = format!("{}/api/v1/componentdefinition", base_url);
-            let response = client.post(&url).json(definition).send().await?;
-            handle_response(response, "ComponentDefinitionCreate").await?;
-        }
-        SaveOperation::ComponentDefinitionUpdate {
-            definition_id,
-            new_definition,
-            ..
-        } => {
-            let url = format!("{}/api/v1/componentdefinition/{}", base_url, definition_id);
-            let response = client.put(&url).json(new_definition).send().await?;
-            handle_response(response, "ComponentDefinitionUpdate").await?;
-        }
-        SaveOperation::ComponentDefinitionPatch {
-            definition_id,
-            patch_data,
-            ..
-        } => {
-            let url = format!("{}/api/v1/componentdefinition/{}", base_url, definition_id);
-            let response = client.patch(&url).json(patch_data).send().await?;
-            handle_response(response, "ComponentDefinitionPatch").await?;
-        }
-        SaveOperation::ComponentDefinitionDelete { definition_id, .. } => {
-            let url = format!("{}/api/v1/componentdefinition/{}", base_url, definition_id);
-            let response = client.delete(&url).send().await?;
-            handle_response(response, "ComponentDefinitionDelete").await?;
-        }
-        SaveOperation::ComponentDefinitionDeleteAll { .. } => {
-            let url = format!("{}/api/v1/componentdefinition", base_url);
-            let response = client.delete(&url).send().await?;
-            handle_response(response, "ComponentDefinitionDeleteAll").await?;
-        }
         SaveOperation::ComponentCreate {
             entity_id,
             component_id: _,
@@ -227,9 +194,7 @@ async fn apply_save_entry(
             let response = client.delete(&url).send().await?;
             handle_response(response, "SystemDeleteAll").await?;
         }
-        SaveOperation::ComponentDefinitionGet { .. }
-        | SaveOperation::ComponentGet { .. }
-        | SaveOperation::SystemGet { .. } => {
+        SaveOperation::ComponentGet { .. } | SaveOperation::SystemGet { .. } => {
             println!(
                 "  Skipping read-only operation: {}",
                 save_entry.operation_type()
