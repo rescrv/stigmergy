@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        DELETE FROM component_definitions\n        WHERE component_name = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b3fd46b49a74cb37c4adb90d8993307c4253d2886299c32e4b0408f8dd3fc7aa"
+}

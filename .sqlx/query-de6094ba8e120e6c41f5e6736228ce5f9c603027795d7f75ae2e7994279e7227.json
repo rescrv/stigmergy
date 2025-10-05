@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT component_name, schema\n        FROM component_definitions\n        ORDER BY created_at ASC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "component_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "schema",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "de6094ba8e120e6c41f5e6736228ce5f9c603027795d7f75ae2e7994279e7227"
+}

@@ -6,6 +6,9 @@
 /// Entity operations with automatic timestamp tracking.
 pub mod entity;
 
+/// Component definition operations with automatic timestamp tracking.
+pub mod component_definition;
+
 #[cfg(test)]
 /// Test utilities for PostgreSQL database operations.
 pub mod tests {

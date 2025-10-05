@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO component_definitions (component_name, schema)\n        VALUES ($1, $2)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a0e99bf072e9bd446149d0f2c9d0fca71562f806e48112d3d2148d62e72fe762"
+}
