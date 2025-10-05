@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE invariants\n        SET asserts = $2, updated_at = CURRENT_TIMESTAMP\n        WHERE invariant_id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ee55f108226a3e909e4278d5cadff589013e736269f65761b33d81df1299c6e1"
+}

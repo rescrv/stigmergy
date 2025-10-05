@@ -145,6 +145,7 @@ mod component;
 mod component_definition;
 mod entity;
 mod errors;
+mod invariant;
 mod json_schema;
 mod system;
 mod system_parser;
@@ -193,6 +194,7 @@ pub use entity::{
     CreateEntityRequest, CreateEntityResponse, Entity, EntityParseError, create_entity_router,
 };
 pub use errors::DataStoreError;
+pub use invariant::{InvariantID, InvariantIDParseError};
 pub use json_schema::{JsonSchema, JsonSchemaBuilder};
 pub use system::{
     CreateSystemFromMarkdownRequest, CreateSystemResponse, System, SystemListItem, SystemName,

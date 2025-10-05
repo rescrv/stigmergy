@@ -15,6 +15,9 @@ pub mod component;
 /// System operations with automatic timestamp tracking.
 pub mod system;
 
+/// Invariant operations with automatic timestamp tracking.
+pub mod invariants;
+
 #[cfg(test)]
 /// Test utilities for PostgreSQL database operations.
 pub mod tests {
