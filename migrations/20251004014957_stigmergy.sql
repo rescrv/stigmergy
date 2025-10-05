@@ -68,6 +68,8 @@ CREATE TABLE systems (
     color VARCHAR(50),
     -- The main content or definition of the system.
     content TEXT,
+    -- The list of tools available to the system.
+    tools TEXT[] NOT NULL DEFAULT '{}',
     -- A list of bids associated with the system.
     bids TEXT[] NOT NULL DEFAULT '{}',
     -- The timestamp when the system was created.

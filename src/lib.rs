@@ -11,8 +11,7 @@
 //!   multiple components attached, following ECS (Entity Component System) patterns
 //! - **Schema Validation**: Components are validated against JSON schemas to ensure
 //!   data integrity and consistency
-//! - **Persistent Logging**: All operations are logged to JSONL files for auditability,
-//!   debugging, and system replay
+//! - **PostgreSQL Storage**: All entities and components are persisted in PostgreSQL
 //! - **HTTP API**: RESTful endpoints for managing entities and components
 //! - **Configuration Management**: System configuration through frontmatter-delimited files
 //!
@@ -36,9 +35,8 @@
 //! - Nested structures with full recursion
 //!
 //! ### Persistence
-//! Every operation is logged to JSONL (JSON Lines) files, creating an immutable audit
-//! trail. These logs can be replayed to reconstruct system state or analyze behavior
-//! over time.
+//! All entities, components, and their relationships are stored in PostgreSQL with
+//! automatic timestamp tracking for creation and modification events.
 //!
 //! ## Architecture
 //!
@@ -50,11 +48,7 @@
 //! ├─────────────────────────────────────────┤
 //! │ Business Logic (Component operations)   │
 //! ├─────────────────────────────────────────┤
-//! │ Data Operations (Standardized wrapper)  │
-//! ├─────────────────────────────────────────┤
-//! │ Data Store (Trait-based abstraction)    │
-//! ├─────────────────────────────────────────┤
-//! │ Persistence (JSONL logging & replay)    │
+//! │ PostgreSQL Database (Persistent storage)│
 //! └─────────────────────────────────────────┘
 //! ```
 //!
@@ -63,8 +57,7 @@
 //! ### Creating and Managing Entities
 //!
 //! ```rust
-//! # use stigmergy::{Entity, InMemoryDataStore, DataStore};
-//! # use std::sync::Arc;
+//! # use stigmergy::Entity;
 //! // Create a new entity with a specific ID
 //! let entity = Entity::new([1u8; 32]);
 //! let entity_str = entity.to_string(); // "entity:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
@@ -74,8 +67,7 @@
 //! assert_eq!(entity, parsed);
 //!
 //! // Generate a random entity
-//! # #[cfg(feature = "random")]
-//! let random_entity = Entity::random().unwrap();
+//! let random_entity = Entity::random_url_safe().unwrap();
 //! ```
 //!
 //! ### Component Schema Definition
@@ -146,44 +138,14 @@
 //! assert!(shape_schema["oneOf"].is_array());
 //! ```
 //!
-//! ### Data Store Operations
-//!
-//! ```rust
-//! # use stigmergy::{Entity, InMemoryDataStore, DataStore, Component, ComponentDefinition};
-//! # use serde_json::json;
-//! # use std::sync::Arc;
-//! let data_store = Arc::new(InMemoryDataStore::new());
-//!
-//! // Create an entity
-//! let entity = Entity::new([1u8; 32]);
-//! data_store.create_entity(&entity).unwrap();
-//!
-//! // Create a component definition
-//! let component = Component::new("Health").unwrap();
-//! let definition = ComponentDefinition::new(
-//!     component.clone(),
-//!     json!({"type": "object", "properties": {"hp": {"type": "integer"}}})
-//! );
-//! data_store.create_component_definition(&component, &definition).unwrap();
-//!
-//! // Attach component data to the entity
-//! let health_data = json!({"hp": 100});
-//! data_store.create_component(&entity, &component, &health_data).unwrap();
-//!
-//! // Retrieve the component
-//! let retrieved = data_store.get_component(&entity, &component).unwrap();
-//! assert_eq!(retrieved, Some(health_data));
-//! ```
 
 #![deny(missing_docs)]
 mod bid;
 mod component;
 mod component_definition;
-mod data_operations;
-mod data_store;
 mod entity;
+mod errors;
 mod json_schema;
-mod savefile;
 mod system;
 mod system_parser;
 mod test_utils;
@@ -227,16 +189,11 @@ pub use component::{
     create_component_instance_router,
 };
 pub use component_definition::{ComponentDefinition, create_component_definition_router};
-pub use data_operations::{DataStoreOperations, OperationResult};
-pub use data_store::{ComponentList, DataStore, DataStoreError, InMemoryDataStore};
 pub use entity::{
     CreateEntityRequest, CreateEntityResponse, Entity, EntityParseError, create_entity_router,
 };
+pub use errors::DataStoreError;
 pub use json_schema::{JsonSchema, JsonSchemaBuilder};
-pub use savefile::{
-    OperationStatus, RestoreResult, SaveEntry, SaveMetadata, SaveOperation, SavefileManager,
-    ValidationResult, ValidationType,
-};
 pub use system::{
     CreateSystemFromMarkdownRequest, CreateSystemResponse, System, SystemListItem, SystemName,
     SystemNameParseError, create_system_router,

@@ -8,10 +8,8 @@
 //!
 //! - **Type-Safe Components**: Component types follow Rust identifier conventions
 //! - **Schema Validation**: All component data is validated against JSON schemas
-//! - **HTTP API**: Complete REST API for component definition and instance management
 //! - **Flexible Schemas**: Support for complex schemas including oneOf unions and enums
 //! - **Entity Scoping**: Components are scoped to specific entities
-//! - **JSON and YAML Support**: Component definitions accept both JSON and YAML based on Content-Type header
 //!
 //! ## Component Architecture
 //!
@@ -71,43 +69,14 @@
 //! let invalid_data = json!({"x": 1.0, "y": 2.0});
 //! assert!(definition.validate_component_data(&invalid_data).is_err());
 //! ```
-//!
-//! ### HTTP API with YAML Support
-//!
-//! The HTTP API automatically detects the content type and accepts both JSON and YAML:
-//!
-//! ```bash
-//! # POST with JSON (default)
-//! curl -X POST http://localhost:8080/componentdefinition \
-//!   -H "Content-Type: application/json" \
-//!   -d '{"component":"Position","schema":{"type":"object","properties":{"x":{"type":"number"}}}}'
-//!
-//! # POST with YAML
-//! curl -X POST http://localhost:8080/componentdefinition \
-//!   -H "Content-Type: application/yaml" \
-//!   -d 'component: Position
-//! schema:
-//!   type: object
-//!   properties:
-//!     x:
-//!       type: number'
-//! ```
-
-use std::collections::HashMap;
-use std::sync::Arc;
 
 use axum::Router;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 use axum::routing::get;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-use crate::{
-    DataStore, DataStoreOperations, Entity, OperationStatus, SaveEntry, SaveMetadata,
-    SaveOperation, SavefileManager, ValidationResult as LogValidationResult, validate_value,
-};
 
 ///////////////////////////////////////////// Component ////////////////////////////////////////////
 
@@ -198,7 +167,7 @@ pub struct CreateComponentRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CreateComponentResponse {
     /// The entity that owns this component
-    pub entity: Entity,
+    pub entity: crate::Entity,
     /// The component type identifier
     pub component: Component,
     /// The component data that was stored
@@ -285,529 +254,253 @@ fn is_valid_rust_type_path(s: &str) -> bool {
         .all(|segment| is_valid_rust_identifier(segment))
 }
 
+////////////////////////////////////////////// Routes //////////////////////////////////////////////
+
+/// Lists all component instances for a specific entity.
 async fn get_components_for_entity(
-    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
-    Path(entity_id): Path<String>,
-    Query(_params): Query<HashMap<String, String>>,
+    State(pool): State<sqlx::PgPool>,
+    Path(entity_str): Path<String>,
 ) -> Result<Json<Vec<ComponentListItem>>, (StatusCode, &'static str)> {
-    // Parse entity ID (prepend "entity:" prefix to base64 part from URL)
-    let full_entity_id = format!("entity:{}", entity_id);
-    let entity: Entity = match full_entity_id.parse() {
-        Ok(e) => e,
-        Err(_) => return Err((StatusCode::BAD_REQUEST, "bad entity")),
-    };
+    let entity: crate::Entity = entity_str
+        .parse()
+        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid entity ID"))?;
 
-    let components = match data_store.list_components_for_entity(&entity) {
-        Ok(comp_list) => comp_list
-            .into_iter()
-            .map(|(component, data)| ComponentListItem { component, data })
-            .collect(),
-        Err(_) => vec![],
-    };
-
-    let save_entry = SaveEntry::new(
-        SaveOperation::ComponentGet {
-            component_id: None,
-            found: !components.is_empty(),
-        },
-        SaveMetadata::rest_api(None),
-    );
-    logger.save_or_error(&save_entry);
-
-    Ok(Json(components))
+    match crate::sql::component::list_for_entity(&pool, &entity).await {
+        Ok(components) => {
+            let items: Vec<ComponentListItem> = components
+                .into_iter()
+                .map(|(component, data)| ComponentListItem { component, data })
+                .collect();
+            Ok(Json(items))
+        }
+        Err(_) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to list components",
+        )),
+    }
 }
 
-#[allow(dead_code)]
+/// Lists all component instances in the system.
 async fn get_all_components(
-    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
-    Query(_params): Query<HashMap<String, String>>,
-) -> Result<Json<Vec<Value>>, (StatusCode, &'static str)> {
-    let components = match data_store.list_components() {
-        Ok(comp_list) => comp_list
-            .into_iter()
-            .map(|((_entity, _id), data)| data)
-            .collect(),
-        Err(_) => vec![],
-    };
-
-    let save_entry = SaveEntry::new(
-        SaveOperation::ComponentGet {
-            component_id: None,
-            found: !components.is_empty(),
-        },
-        SaveMetadata::rest_api(None),
-    );
-    logger.save_or_error(&save_entry);
-
-    Ok(Json(components))
+    State(pool): State<sqlx::PgPool>,
+) -> Result<Json<Vec<(String, ComponentListItem)>>, (StatusCode, &'static str)> {
+    match crate::sql::component::list_all(&pool).await {
+        Ok(components) => {
+            let items: Vec<(String, ComponentListItem)> = components
+                .into_iter()
+                .map(|((entity, component), data)| {
+                    (entity.to_string(), ComponentListItem { component, data })
+                })
+                .collect();
+            Ok(Json(items))
+        }
+        Err(_) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to list all components",
+        )),
+    }
 }
 
+/// Creates a new component instance for an entity.
 async fn create_component_for_entity(
-    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
-    Path(entity_id): Path<String>,
+    State(pool): State<sqlx::PgPool>,
+    Path(entity_str): Path<String>,
     Json(request): Json<CreateComponentRequest>,
-) -> Result<Json<CreateComponentResponse>, (StatusCode, &'static str)> {
-    // Parse entity ID (prepend "entity:" prefix to base64 part from URL)
-    let full_entity_id = format!("entity:{}", entity_id);
-    let entity: Entity = match full_entity_id.parse() {
-        Ok(e) => e,
-        Err(_) => return Err((StatusCode::BAD_REQUEST, "invalid entity id")),
-    };
+) -> Result<Json<CreateComponentResponse>, (StatusCode, String)> {
+    let entity: crate::Entity = entity_str
+        .parse()
+        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid entity ID".to_string()))?;
 
-    // Use a fallback schema for validation
-    // Component definitions are now managed via PostgreSQL and accessed through
-    // the component definition router, not through the DataStore trait
-    let validation_schema = serde_json::json!({
-        "oneOf": [
-            {
-                "type": "string",
-                "enum": ["Red", "Green", "Blue"]
-            },
-            {
-                "type": "object",
-                "properties": {
-                    "Custom": { "type": "string" }
-                },
-                "required": ["Custom"]
-            }
-        ]
-    });
-
-    let validation_result = match validate_value(&request.data, &validation_schema) {
-        Ok(()) => Some(LogValidationResult::success()),
-        Err(e) => {
-            let save_entry = SaveEntry::new(
-                SaveOperation::ComponentCreate {
-                    entity_id: entity_id.clone(),
-                    component_id: "generated_id".to_string(),
-                    component_data: request.data.clone(),
-                    validation_result: Some(LogValidationResult::failed(e.to_string())),
-                },
-                SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
-            );
-            logger.save_or_error(&save_entry);
-            return Err((StatusCode::BAD_REQUEST, "data validation failed"));
+    // Validate the component data against the schema
+    let definition = match crate::sql::component_definition::get(&pool, &request.component).await {
+        Ok(Some(def_record)) => def_record.definition,
+        Ok(None) => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                format!(
+                    "component definition not found: {}",
+                    request.component.as_str()
+                ),
+            ));
+        }
+        Err(_) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to retrieve component definition".to_string(),
+            ));
         }
     };
 
-    let component_id = request.component.as_str().to_string();
-    let result = DataStoreOperations::create_component(
-        &*data_store,
-        &entity,
-        &request.component,
-        &request.data,
-    );
-    if !result.success {
-        let save_entry = SaveEntry::new(
-            SaveOperation::ComponentCreate {
-                entity_id: entity_id.clone(),
-                component_id: component_id.clone(),
-                component_data: request.data.clone(),
-                validation_result,
-            },
-            SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
-        );
-        logger.save_or_error(&save_entry);
-        return Err(match result.into_error() {
-            crate::DataStoreError::AlreadyExists => (StatusCode::CONFLICT, "already exists"),
-            crate::DataStoreError::NotFound => (StatusCode::NOT_FOUND, "entity not found"), // Entity doesn't exist
-            _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal server error"),
-        });
+    if let Err(e) = definition.validate_component_data(&request.data) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("component data validation failed: {}", e),
+        ));
     }
 
-    let save_entry = SaveEntry::new(
-        SaveOperation::ComponentCreate {
-            entity_id,
-            component_id,
-            component_data: request.data.clone(),
-            validation_result,
-        },
-        SaveMetadata::rest_api(None),
-    );
-    logger.save_or_error(&save_entry);
-
-    let response = CreateComponentResponse {
-        entity,
-        component: request.component,
-        data: request.data,
-    };
-
-    Ok(Json(response))
-}
-
-async fn update_component_for_entity(
-    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
-    Path(entity_id): Path<String>,
-    Json(component): Json<Value>,
-) -> Result<Json<Value>, (StatusCode, &'static str)> {
-    // Parse entity ID (prepend "entity:" prefix to base64 part from URL)
-    let full_entity_id = format!("entity:{}", entity_id);
-    let entity = match full_entity_id.parse::<Entity>() {
-        Ok(e) => e,
-        Err(_) => return Err((StatusCode::BAD_REQUEST, "invalid entity id")),
-    };
-
-    let component_id = Component::new("updated_id").unwrap();
-    let old_data = data_store
-        .get_component(&entity, &component_id)
-        .ok()
-        .flatten();
-    let result =
-        DataStoreOperations::update_component(&*data_store, &entity, &component_id, &component);
-    if !result.success {
-        let save_entry = SaveEntry::new(
-            SaveOperation::ComponentUpdate {
-                entity_id: entity_id.clone(),
-                component_id: component_id.as_str().to_string(),
-                old_data,
-                new_data: component.clone(),
-                validation_result: None,
-            },
-            SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
-        );
-        logger.save_or_error(&save_entry);
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error"));
+    match crate::sql::component::create(&pool, &entity, &request.component, &request.data).await {
+        Ok(()) => {
+            let response = CreateComponentResponse {
+                entity,
+                component: request.component,
+                data: request.data,
+            };
+            Ok(Json(response))
+        }
+        Err(crate::DataStoreError::AlreadyExists) => Err((
+            StatusCode::CONFLICT,
+            "component instance already exists for this entity".to_string(),
+        )),
+        Err(crate::DataStoreError::NotFound) => {
+            Err((StatusCode::NOT_FOUND, "entity not found".to_string()))
+        }
+        Err(_) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to create component instance".to_string(),
+        )),
     }
-
-    let save_entry = SaveEntry::new(
-        SaveOperation::ComponentUpdate {
-            entity_id,
-            component_id: component_id.as_str().to_string(),
-            old_data,
-            new_data: component.clone(),
-            validation_result: None,
-        },
-        SaveMetadata::rest_api(None),
-    );
-    logger.save_or_error(&save_entry);
-
-    Ok(Json(component))
 }
 
-async fn patch_component_for_entity(
-    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
-    Path(entity_id): Path<String>,
-    Json(patch): Json<Value>,
-) -> Result<Json<Value>, (StatusCode, &'static str)> {
-    // Parse entity ID (prepend "entity:" prefix to base64 part from URL)
-    let full_entity_id = format!("entity:{}", entity_id);
-    let entity = match full_entity_id.parse::<Entity>() {
-        Ok(e) => e,
-        Err(_) => return Err((StatusCode::BAD_REQUEST, "invalid entity id")),
-    };
-
-    let component_id = Component::new("patched_id").unwrap();
-    let result =
-        DataStoreOperations::update_component(&*data_store, &entity, &component_id, &patch);
-    if !result.success {
-        let save_entry = SaveEntry::new(
-            SaveOperation::ComponentPatch {
-                entity_id: entity_id.clone(),
-                component_id: component_id.as_str().to_string(),
-                patch_data: patch.clone(),
-                result_data: patch.clone(),
-            },
-            SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
-        );
-        logger.save_or_error(&save_entry);
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error"));
-    }
-
-    let save_entry = SaveEntry::new(
-        SaveOperation::ComponentPatch {
-            entity_id,
-            component_id: component_id.as_str().to_string(),
-            patch_data: patch.clone(),
-            result_data: patch.clone(),
-        },
-        SaveMetadata::rest_api(None),
-    );
-    logger.save_or_error(&save_entry);
-
-    Ok(Json(patch))
-}
-
-async fn delete_components_for_entity(
-    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
-    Path(entity_id): Path<String>,
-) -> Result<StatusCode, (StatusCode, &'static str)> {
-    // Parse entity ID (prepend "entity:" prefix to base64 part from URL)
-    let full_entity_id = format!("entity:{}", entity_id);
-    let entity = match full_entity_id.parse::<Entity>() {
-        Ok(e) => e,
-        Err(_) => return Err((StatusCode::BAD_REQUEST, "invalid entity id")),
-    };
-
-    let result = DataStoreOperations::delete_all_components_for_entity(&*data_store, &entity);
-    let count_deleted = if result.success {
-        result.data.unwrap_or(0)
-    } else {
-        let save_entry = SaveEntry::new(
-            SaveOperation::ComponentDeleteAll { count_deleted: 0 },
-            SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
-        );
-        logger.save_or_error(&save_entry);
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error"));
-    };
-
-    let save_entry = SaveEntry::new(
-        SaveOperation::ComponentDeleteAll { count_deleted },
-        SaveMetadata::rest_api(None),
-    );
-    logger.save_or_error(&save_entry);
-
-    Ok(StatusCode::NO_CONTENT)
-}
-
+/// Gets a specific component instance for an entity.
 async fn get_component_by_id_for_entity(
-    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
-    Path((entity_id, component_id)): Path<(String, String)>,
+    State(pool): State<sqlx::PgPool>,
+    Path((entity_str, component_str)): Path<(String, String)>,
 ) -> Result<Json<Value>, (StatusCode, &'static str)> {
-    // Parse entity ID (prepend "entity:" prefix to base64 part from URL)
-    let full_entity_id = format!("entity:{}", entity_id);
-    let entity = match full_entity_id.parse::<Entity>() {
-        Ok(e) => e,
-        Err(_) => return Err((StatusCode::BAD_REQUEST, "invalid entity id")),
-    };
+    let entity: crate::Entity = entity_str
+        .parse()
+        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid entity ID"))?;
 
-    let component_type =
-        Component::new(&component_id).ok_or((StatusCode::BAD_REQUEST, "invalid component name"))?;
-    let component = match data_store.get_component(&entity, &component_type) {
-        Ok(Some(data)) => data,
-        Ok(None) | Err(_) => {
-            let save_entry = SaveEntry::new(
-                SaveOperation::ComponentGet {
-                    component_id: Some(component_id),
-                    found: false,
-                },
-                SaveMetadata::rest_api(None),
-            );
-            logger.save_or_error(&save_entry);
-            return Err((StatusCode::NOT_FOUND, "not found"));
+    let component =
+        Component::new(component_str).ok_or((StatusCode::BAD_REQUEST, "invalid component name"))?;
+
+    match crate::sql::component::get(&pool, &entity, &component).await {
+        Ok(Some(data)) => Ok(Json(data)),
+        Ok(None) => Err((StatusCode::NOT_FOUND, "component instance not found")),
+        Err(_) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to retrieve component instance",
+        )),
+    }
+}
+
+/// Updates a specific component instance for an entity.
+async fn update_component_by_id_for_entity(
+    State(pool): State<sqlx::PgPool>,
+    Path((entity_str, component_str)): Path<(String, String)>,
+    Json(data): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let entity: crate::Entity = entity_str
+        .parse()
+        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid entity ID".to_string()))?;
+
+    let component = Component::new(component_str).ok_or((
+        StatusCode::BAD_REQUEST,
+        "invalid component name".to_string(),
+    ))?;
+
+    // Validate the component data against the schema
+    let definition = match crate::sql::component_definition::get(&pool, &component).await {
+        Ok(Some(def_record)) => def_record.definition,
+        Ok(None) => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                format!("component definition not found: {}", component.as_str()),
+            ));
+        }
+        Err(_) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to retrieve component definition".to_string(),
+            ));
         }
     };
 
-    let save_entry = SaveEntry::new(
-        SaveOperation::ComponentGet {
-            component_id: Some(component_id),
-            found: true,
-        },
-        SaveMetadata::rest_api(None),
-    );
-    logger.save_or_error(&save_entry);
-
-    Ok(Json(component))
-}
-
-async fn update_component_by_id_for_entity(
-    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
-    Path((entity_id, component_id)): Path<(String, String)>,
-    Json(component): Json<Value>,
-) -> Result<Json<Value>, (StatusCode, &'static str)> {
-    // Parse entity ID (prepend "entity:" prefix to base64 part from URL)
-    let full_entity_id = format!("entity:{}", entity_id);
-    let entity = match full_entity_id.parse::<Entity>() {
-        Ok(e) => e,
-        Err(_) => return Err((StatusCode::BAD_REQUEST, "invalid entity id")),
-    };
-
-    let component_type =
-        Component::new(&component_id).ok_or((StatusCode::BAD_REQUEST, "invalid component name"))?;
-    let old_data = data_store
-        .get_component(&entity, &component_type)
-        .ok()
-        .flatten();
-    let result =
-        DataStoreOperations::update_component(&*data_store, &entity, &component_type, &component);
-    if !result.success {
-        let save_entry = SaveEntry::new(
-            SaveOperation::ComponentUpdate {
-                entity_id: entity_id.clone(),
-                component_id: component_id.as_str().to_string(),
-                old_data,
-                new_data: component.clone(),
-                validation_result: None,
-            },
-            SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
-        );
-        logger.save_or_error(&save_entry);
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error"));
+    if let Err(e) = definition.validate_component_data(&data) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("component data validation failed: {}", e),
+        ));
     }
 
-    let save_entry = SaveEntry::new(
-        SaveOperation::ComponentUpdate {
-            entity_id,
-            component_id: component_id.as_str().to_string(),
-            old_data,
-            new_data: component.clone(),
-            validation_result: None,
-        },
-        SaveMetadata::rest_api(None),
-    );
-    logger.save_or_error(&save_entry);
-
-    Ok(Json(component))
+    match crate::sql::component::update(&pool, &entity, &component, &data).await {
+        Ok(true) => Ok(Json(data)),
+        Ok(false) => Err((
+            StatusCode::NOT_FOUND,
+            "component instance not found".to_string(),
+        )),
+        Err(_) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to update component instance".to_string(),
+        )),
+    }
 }
 
-async fn patch_component_by_id_for_entity(
-    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
-    Path((entity_id, component_id)): Path<(String, String)>,
-    Json(patch): Json<Value>,
-) -> Result<Json<Value>, (StatusCode, &'static str)> {
-    // Parse entity ID (prepend "entity:" prefix to base64 part from URL)
-    let full_entity_id = format!("entity:{}", entity_id);
-    let entity = match full_entity_id.parse::<Entity>() {
-        Ok(e) => e,
-        Err(_) => return Err((StatusCode::BAD_REQUEST, "invalid entity id")),
-    };
-
-    let component_type =
-        Component::new(&component_id).ok_or((StatusCode::BAD_REQUEST, "invalid component name"))?;
-    let mut component = patch.clone();
-    if let Some(obj) = component.as_object_mut() {
-        obj.insert(
-            "id".to_string(),
-            serde_json::Value::String(component_id.clone()),
-        );
-    }
-
-    let result =
-        DataStoreOperations::update_component(&*data_store, &entity, &component_type, &component);
-    if !result.success {
-        let save_entry = SaveEntry::new(
-            SaveOperation::ComponentPatch {
-                entity_id: entity_id.clone(),
-                component_id: component_id.as_str().to_string(),
-                patch_data: patch,
-                result_data: component.clone(),
-            },
-            SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
-        );
-        logger.save_or_error(&save_entry);
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error"));
-    }
-
-    let save_entry = SaveEntry::new(
-        SaveOperation::ComponentPatch {
-            entity_id,
-            component_id,
-            patch_data: patch,
-            result_data: component.clone(),
-        },
-        SaveMetadata::rest_api(None),
-    );
-    logger.save_or_error(&save_entry);
-
-    Ok(Json(component))
-}
-
+/// Deletes a specific component instance for an entity.
 async fn delete_component_by_id_for_entity(
-    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
-    Path((entity_id, component_id)): Path<(String, String)>,
+    State(pool): State<sqlx::PgPool>,
+    Path((entity_str, component_str)): Path<(String, String)>,
 ) -> Result<StatusCode, (StatusCode, &'static str)> {
-    // Parse entity ID (prepend "entity:" prefix to base64 part from URL)
-    let full_entity_id = format!("entity:{}", entity_id);
-    let entity = match full_entity_id.parse::<Entity>() {
-        Ok(e) => e,
-        Err(_) => return Err((StatusCode::BAD_REQUEST, "invalid entity id")),
-    };
+    let entity: crate::Entity = entity_str
+        .parse()
+        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid entity ID"))?;
 
-    let component_type =
-        Component::new(&component_id).ok_or((StatusCode::BAD_REQUEST, "invalid component name"))?;
-    let deleted_data = data_store
-        .get_component(&entity, &component_type)
-        .ok()
-        .flatten();
-    let result = DataStoreOperations::delete_component(&*data_store, &entity, &component_type);
-    if !result.success {
-        let save_entry = SaveEntry::new(
-            SaveOperation::ComponentDelete {
-                entity_id: entity_id.clone(),
-                component_id: component_id.clone(),
-                deleted_data,
-            },
-            SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
-        );
-        logger.save_or_error(&save_entry);
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error"));
+    let component =
+        Component::new(component_str).ok_or((StatusCode::BAD_REQUEST, "invalid component name"))?;
+
+    match crate::sql::component::delete(&pool, &entity, &component).await {
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Err((StatusCode::NOT_FOUND, "component instance not found")),
+        Err(_) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to delete component instance",
+        )),
     }
-
-    let save_entry = SaveEntry::new(
-        SaveOperation::ComponentDelete {
-            entity_id,
-            component_id,
-            deleted_data,
-        },
-        SaveMetadata::rest_api(None),
-    );
-    logger.save_or_error(&save_entry);
-
-    Ok(StatusCode::NO_CONTENT)
 }
 
-////////////////////////////////////////////// router //////////////////////////////////////////////
+/// Deletes all component instances for an entity.
+async fn delete_components_for_entity(
+    State(pool): State<sqlx::PgPool>,
+    Path(entity_str): Path<String>,
+) -> Result<StatusCode, (StatusCode, &'static str)> {
+    let entity: crate::Entity = entity_str
+        .parse()
+        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid entity ID"))?;
 
-/// Creates an HTTP router for component instance operations.
-///
-/// This function sets up HTTP endpoints for managing component instances attached to entities.
-///
-/// # Arguments
-/// * `logger` - Shared savefile manager for operation logging
-/// * `data_store` - Shared data store for component instance storage
-///
-/// # Returns
-/// An Axum Router configured with component instance endpoints
-///
-/// # Endpoints Created
-/// - `POST /entity/:entity_base64/component` - Create component instance
-/// - `GET /entity/:entity_base64/component/:component_id` - Get component instance
-/// - `PUT /entity/:entity_base64/component/:component_id` - Update component instance
-/// - `PATCH /entity/:entity_base64/component/:component_id` - Patch component instance
-/// - `DELETE /entity/:entity_base64/component/:component_id` - Delete component instance
-/// - `DELETE /entity/:entity_base64/component` - Delete all components for entity
-/// - `GET /entity/:entity_base64/component` - List components for entity
-///
-/// # Examples
-/// ```no_run
-/// # use stigmergy::{create_component_instance_router, SavefileManager, InMemoryDataStore};
-/// # use std::sync::Arc;
-/// # use std::path::PathBuf;
-/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let logger = Arc::new(SavefileManager::new(PathBuf::from("test.jsonl")));
-/// let store = Arc::new(InMemoryDataStore::new());
-/// let router = create_component_instance_router(logger, store);
-/// # Ok(())
-/// # }
-/// ```
-pub fn create_component_instance_router(
-    logger: Arc<SavefileManager>,
-    data_store: Arc<dyn DataStore>,
-) -> Router {
+    match crate::sql::component::delete_all_for_entity(&pool, &entity).await {
+        Ok(_) => Ok(StatusCode::NO_CONTENT),
+        Err(_) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to delete component instances",
+        )),
+    }
+}
+
+////////////////////////////////////////////// Router //////////////////////////////////////////////
+
+/// Creates an Axum router with component instance management endpoints.
+pub fn create_component_instance_router(pool: sqlx::PgPool) -> Router {
     Router::new()
+        .route("/component", get(get_all_components))
         .route(
             "/entity/:entity_id/component",
-            get(get_components_for_entity)
-                .post(create_component_for_entity)
-                .put(update_component_for_entity)
-                .patch(patch_component_for_entity)
-                .delete(delete_components_for_entity),
+            get(get_components_for_entity).delete(delete_components_for_entity),
         )
         .route(
             "/entity/:entity_id/component/:component_id",
             get(get_component_by_id_for_entity)
                 .put(update_component_by_id_for_entity)
-                .patch(patch_component_by_id_for_entity)
                 .delete(delete_component_by_id_for_entity),
         )
-        .with_state((logger, data_store))
+        .route(
+            "/entity/:entity_id/component",
+            axum::routing::post(create_component_for_entity),
+        )
+        .with_state(pool)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::test_helpers::{
-        clear_savefile, create_test_savefile_manager_with_path, load_entries, test_data_store,
-    };
 
     #[test]
     fn valid_rust_identifier_simple() {
@@ -865,492 +558,5 @@ mod tests {
         assert!(Component::new("::").is_none());
         assert!(Component::new("foo::").is_none());
         assert!(Component::new("123::foo").is_none());
-    }
-
-    // Component Instance HTTP Endpoint Tests
-    #[tokio::test]
-    async fn get_components_logs_correctly() {
-        let (logger, log_path) =
-            create_test_savefile_manager_with_path("component", "get_components");
-        clear_savefile(&log_path);
-
-        let logs_before = load_entries(&log_path);
-        assert!(logs_before.is_empty());
-
-        let data_store = test_data_store();
-        let entity = Entity::random().unwrap();
-        let entity_id = entity.base64_part();
-        let result = get_components_for_entity(
-            State((logger, data_store)),
-            Path(entity_id),
-            Query(HashMap::<String, String>::new()),
-        )
-        .await;
-        assert!(result.is_ok());
-
-        let logs_after = load_entries(&log_path);
-        assert_eq!(logs_after.len(), 1);
-
-        let save_entry = &logs_after[0];
-        assert_eq!(save_entry.operation_type(), "ComponentGet");
-        assert!(save_entry.is_success());
-
-        match &save_entry.operation {
-            SaveOperation::ComponentGet {
-                component_id,
-                found,
-            } => {
-                assert!(component_id.is_none());
-                assert!(!*found);
-            }
-            _ => panic!("Expected ComponentGet operation"),
-        }
-
-        clear_savefile(&log_path);
-    }
-
-    #[tokio::test]
-    async fn create_component_success_logs_correctly() {
-        let (logger, log_path) =
-            create_test_savefile_manager_with_path("component", "create_comp_success");
-        clear_savefile(&log_path);
-
-        let component_data = serde_json::json!("Red");
-        let logs_before = load_entries(&log_path);
-        assert!(logs_before.is_empty());
-
-        let entity = Entity::random().unwrap();
-        let data_store = test_data_store();
-
-        let request = CreateComponentRequest {
-            component: Component::new("TestComponent").unwrap(),
-            data: component_data.clone(),
-        };
-
-        let result = create_component_for_entity(
-            State((logger, data_store)),
-            Path(entity.base64_part()),
-            Json(request),
-        )
-        .await;
-        assert!(result.is_ok());
-
-        let logs_after = load_entries(&log_path);
-        assert_eq!(logs_after.len(), 1);
-
-        let save_entry = &logs_after[0];
-        assert_eq!(save_entry.operation_type(), "ComponentCreate");
-        assert!(save_entry.is_success());
-
-        match &save_entry.operation {
-            SaveOperation::ComponentCreate {
-                entity_id: _,
-                component_id,
-                component_data: logged_data,
-                validation_result,
-            } => {
-                assert_eq!(*component_id, "TestComponent");
-                assert_eq!(*logged_data, component_data);
-                assert!(validation_result.as_ref().unwrap().is_success());
-            }
-            _ => panic!("Expected ComponentCreate operation"),
-        }
-
-        clear_savefile(&log_path);
-    }
-
-    #[tokio::test]
-    async fn create_component_failure_logs_correctly() {
-        let (logger, log_path) =
-            create_test_savefile_manager_with_path("component", "create_comp_failure");
-        clear_savefile(&log_path);
-
-        let component_data = serde_json::json!("InvalidColor");
-        let logs_before = load_entries(&log_path);
-        assert!(logs_before.is_empty());
-
-        let entity = Entity::random().unwrap();
-        let request = CreateComponentRequest {
-            component: Component::new("TestComponent").unwrap(),
-            data: component_data.clone(),
-        };
-
-        let result = create_component_for_entity(
-            State((logger, test_data_store())),
-            Path(entity.base64_part()),
-            Json(request),
-        )
-        .await;
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err(),
-            (StatusCode::BAD_REQUEST, "data validation failed")
-        );
-
-        let logs_after = load_entries(&log_path);
-        assert_eq!(logs_after.len(), 1);
-
-        let save_entry = &logs_after[0];
-        assert_eq!(save_entry.operation_type(), "ComponentCreate");
-        assert!(save_entry.is_failure());
-
-        match &save_entry.operation {
-            SaveOperation::ComponentCreate {
-                entity_id: _,
-                component_id,
-                component_data: logged_data,
-                validation_result,
-            } => {
-                assert_eq!(*component_id, "generated_id");
-                assert_eq!(*logged_data, component_data);
-                assert!(validation_result.as_ref().unwrap().is_failure());
-            }
-            _ => panic!("Expected ComponentCreate operation"),
-        }
-
-        clear_savefile(&log_path);
-    }
-
-    #[tokio::test]
-    async fn update_component_logs_correctly() {
-        let (logger, log_path) = create_test_savefile_manager_with_path("component", "update_comp");
-        clear_savefile(&log_path);
-
-        let entity = Entity::random().unwrap();
-        let entity_id = entity.base64_part();
-        let component_data = serde_json::json!({"color": "blue"});
-        let logs_before = load_entries(&log_path);
-        assert!(logs_before.is_empty());
-
-        let result = update_component_for_entity(
-            State((logger, test_data_store())),
-            Path(entity_id),
-            Json(component_data.clone()),
-        )
-        .await;
-        assert!(result.is_ok());
-
-        let logs_after = load_entries(&log_path);
-        assert_eq!(logs_after.len(), 1);
-
-        let save_entry = &logs_after[0];
-        assert_eq!(save_entry.operation_type(), "ComponentUpdate");
-        assert!(save_entry.is_success());
-
-        match &save_entry.operation {
-            SaveOperation::ComponentUpdate {
-                entity_id: _,
-                component_id,
-                old_data,
-                new_data,
-                validation_result,
-            } => {
-                assert_eq!(*component_id, "updated_id");
-                assert!(old_data.is_none());
-                assert_eq!(*new_data, component_data);
-                assert!(validation_result.is_none());
-            }
-            _ => panic!("Expected ComponentUpdate operation"),
-        }
-
-        clear_savefile(&log_path);
-    }
-
-    #[tokio::test]
-    async fn patch_component_logs_correctly() {
-        let (logger, log_path) = create_test_savefile_manager_with_path("component", "patch_comp");
-        clear_savefile(&log_path);
-
-        let entity = Entity::random().unwrap();
-        let entity_id = entity.base64_part();
-        let patch_data = serde_json::json!({"size": "large"});
-        let logs_before = load_entries(&log_path);
-        assert!(logs_before.is_empty());
-
-        let result = patch_component_for_entity(
-            State((logger, test_data_store())),
-            Path(entity_id),
-            Json(patch_data.clone()),
-        )
-        .await;
-        assert!(result.is_ok());
-
-        let logs_after = load_entries(&log_path);
-        assert_eq!(logs_after.len(), 1);
-
-        let save_entry = &logs_after[0];
-        assert_eq!(save_entry.operation_type(), "ComponentPatch");
-        assert!(save_entry.is_success());
-
-        match &save_entry.operation {
-            SaveOperation::ComponentPatch {
-                entity_id: _,
-                component_id,
-                patch_data: logged_patch,
-                result_data,
-            } => {
-                assert_eq!(*component_id, "patched_id");
-                assert_eq!(*logged_patch, patch_data);
-                assert_eq!(*result_data, patch_data);
-            }
-            _ => panic!("Expected ComponentPatch operation"),
-        }
-
-        clear_savefile(&log_path);
-    }
-
-    #[tokio::test]
-    async fn delete_components_logs_correctly() {
-        let (logger, log_path) =
-            create_test_savefile_manager_with_path("component", "delete_comps");
-        clear_savefile(&log_path);
-
-        let entity = Entity::random().unwrap();
-        let entity_id = entity.base64_part();
-        let logs_before = load_entries(&log_path);
-        assert!(logs_before.is_empty());
-
-        let result =
-            delete_components_for_entity(State((logger, test_data_store())), Path(entity_id)).await;
-        assert_eq!(result, Ok(StatusCode::NO_CONTENT));
-
-        let logs_after = load_entries(&log_path);
-        assert_eq!(logs_after.len(), 1);
-
-        let save_entry = &logs_after[0];
-        assert_eq!(save_entry.operation_type(), "ComponentDeleteAll");
-        assert!(save_entry.is_success());
-
-        match &save_entry.operation {
-            SaveOperation::ComponentDeleteAll { count_deleted } => {
-                assert_eq!(*count_deleted, 0);
-            }
-            _ => panic!("Expected ComponentDeleteAll operation"),
-        }
-
-        clear_savefile(&log_path);
-    }
-
-    #[tokio::test]
-    async fn get_component_by_id_logs_correctly() {
-        let (logger, log_path) =
-            create_test_savefile_manager_with_path("component", "get_comp_by_id");
-        clear_savefile(&log_path);
-
-        let entity = Entity::random().unwrap();
-        let entity_id = entity.base64_part();
-        let test_id = "comp123".to_string();
-        let logs_before = load_entries(&log_path);
-        assert!(logs_before.is_empty());
-
-        let result = get_component_by_id_for_entity(
-            State((logger, test_data_store())),
-            Path((entity_id, test_id.clone())),
-        )
-        .await;
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), (StatusCode::NOT_FOUND, "not found"));
-
-        let logs_after = load_entries(&log_path);
-        assert_eq!(logs_after.len(), 1);
-
-        let save_entry = &logs_after[0];
-        assert_eq!(save_entry.operation_type(), "ComponentGet");
-        assert!(save_entry.is_success());
-
-        match &save_entry.operation {
-            SaveOperation::ComponentGet {
-                component_id,
-                found,
-            } => {
-                assert_eq!(*component_id, Some(test_id));
-                assert!(!*found);
-            }
-            _ => panic!("Expected ComponentGet operation"),
-        }
-
-        clear_savefile(&log_path);
-    }
-
-    #[tokio::test]
-    async fn update_component_by_id_logs_correctly() {
-        let (logger, log_path) =
-            create_test_savefile_manager_with_path("component", "update_comp_by_id");
-        clear_savefile(&log_path);
-
-        let entity = Entity::random().unwrap();
-        let entity_id = entity.base64_part();
-        let test_id = "comp456".to_string();
-        let component_data = serde_json::json!({"status": "active"});
-        let logs_before = load_entries(&log_path);
-        assert!(logs_before.is_empty());
-
-        let result = update_component_by_id_for_entity(
-            State((logger, test_data_store())),
-            Path((entity_id, test_id.clone())),
-            Json(component_data.clone()),
-        )
-        .await;
-        assert!(result.is_ok());
-
-        let logs_after = load_entries(&log_path);
-        assert_eq!(logs_after.len(), 1);
-
-        let save_entry = &logs_after[0];
-        assert_eq!(save_entry.operation_type(), "ComponentUpdate");
-        assert!(save_entry.is_success());
-
-        match &save_entry.operation {
-            SaveOperation::ComponentUpdate {
-                entity_id: _,
-                component_id,
-                old_data,
-                new_data,
-                validation_result,
-            } => {
-                assert_eq!(*component_id, test_id);
-                assert!(old_data.is_none());
-                assert_eq!(*new_data, component_data);
-                assert!(validation_result.is_none());
-            }
-            _ => panic!("Expected ComponentUpdate operation"),
-        }
-
-        clear_savefile(&log_path);
-    }
-
-    #[tokio::test]
-    async fn patch_component_by_id_logs_correctly() {
-        let (logger, log_path) =
-            create_test_savefile_manager_with_path("component", "patch_comp_by_id");
-        clear_savefile(&log_path);
-
-        let entity = Entity::random().unwrap();
-        let entity_id = entity.base64_part();
-        let test_id = "comp789".to_string();
-        let patch_data = serde_json::json!({"priority": "high"});
-        let logs_before = load_entries(&log_path);
-        assert!(logs_before.is_empty());
-
-        let result = patch_component_by_id_for_entity(
-            State((logger, test_data_store())),
-            Path((entity_id, test_id.clone())),
-            Json(patch_data.clone()),
-        )
-        .await;
-        assert!(result.is_ok());
-
-        let logs_after = load_entries(&log_path);
-        assert_eq!(logs_after.len(), 1);
-
-        let save_entry = &logs_after[0];
-        assert_eq!(save_entry.operation_type(), "ComponentPatch");
-        assert!(save_entry.is_success());
-
-        match &save_entry.operation {
-            SaveOperation::ComponentPatch {
-                entity_id: _,
-                component_id,
-                patch_data: logged_patch,
-                result_data,
-            } => {
-                assert_eq!(*component_id, test_id);
-                assert_eq!(*logged_patch, patch_data);
-                // The result should include the id
-                if let Some(obj) = result_data.as_object() {
-                    assert!(obj.contains_key("id"));
-                    assert_eq!(
-                        obj.get("id").unwrap(),
-                        &serde_json::Value::String(test_id.clone())
-                    );
-                }
-            }
-            _ => panic!("Expected ComponentPatch operation"),
-        }
-
-        clear_savefile(&log_path);
-    }
-
-    #[tokio::test]
-    async fn delete_component_by_id_logs_correctly() {
-        let (logger, log_path) =
-            create_test_savefile_manager_with_path("component", "delete_comp_by_id");
-        clear_savefile(&log_path);
-
-        let entity = Entity::random().unwrap();
-        let entity_id = entity.base64_part();
-        let test_id = "comp_delete".to_string();
-        let logs_before = load_entries(&log_path);
-        assert!(logs_before.is_empty());
-
-        let result = delete_component_by_id_for_entity(
-            State((logger, test_data_store())),
-            Path((entity_id, test_id.clone())),
-        )
-        .await;
-        assert_eq!(result, Ok(StatusCode::NO_CONTENT));
-
-        let logs_after = load_entries(&log_path);
-        assert_eq!(logs_after.len(), 1);
-
-        let save_entry = &logs_after[0];
-        assert_eq!(save_entry.operation_type(), "ComponentDelete");
-        assert!(save_entry.is_success());
-
-        match &save_entry.operation {
-            SaveOperation::ComponentDelete {
-                entity_id: _,
-                component_id,
-                deleted_data,
-            } => {
-                assert_eq!(*component_id, test_id);
-                assert!(deleted_data.is_none());
-            }
-            _ => panic!("Expected ComponentDelete operation"),
-        }
-
-        clear_savefile(&log_path);
-    }
-
-    #[tokio::test]
-    async fn data_store_error_handling_component() {
-        let (logger, log_path) =
-            create_test_savefile_manager_with_path("component", "data_store_error_comp");
-        clear_savefile(&log_path);
-
-        let component_data = serde_json::json!("Green");
-        let data_store = test_data_store();
-        let test_component = Component::new("TestComponent").unwrap();
-
-        let entity = Entity::random().unwrap();
-
-        // Create component first (directly in data store)
-        data_store
-            .create_component(&entity, &test_component, &component_data)
-            .unwrap();
-
-        // Try to create again via HTTP handler - should get CONFLICT
-        let request = CreateComponentRequest {
-            component: test_component,
-            data: component_data.clone(),
-        };
-
-        let result = create_component_for_entity(
-            State((logger.clone(), data_store.clone())),
-            Path(entity.base64_part()),
-            Json(request),
-        )
-        .await;
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err(),
-            (StatusCode::CONFLICT, "already exists")
-        );
-
-        // Store should still have exactly one component
-        let components = data_store.list_components().unwrap();
-        assert_eq!(components.len(), 1);
-
-        clear_savefile(&log_path);
     }
 }

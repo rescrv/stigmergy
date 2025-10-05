@@ -9,6 +9,12 @@ pub mod entity;
 /// Component definition operations with automatic timestamp tracking.
 pub mod component_definition;
 
+/// Component instance operations with automatic timestamp tracking.
+pub mod component;
+
+/// System operations with automatic timestamp tracking.
+pub mod system;
+
 #[cfg(test)]
 /// Test utilities for PostgreSQL database operations.
 pub mod tests {

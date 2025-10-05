@@ -4,8 +4,8 @@ use arrrg_derive::CommandLine;
 use stigmergy::{
     cli_utils,
     commands::{
-        handle_apply_command, handle_component_command, handle_componentdefinition_command,
-        handle_entity_command, handle_system_command,
+        handle_component_command, handle_componentdefinition_command, handle_entity_command,
+        handle_system_command,
     },
     http_utils,
 };
@@ -19,7 +19,6 @@ struct Options {
 const USAGE: &str = r#"Usage: stigctl <command> [args...]
 
 Commands:
-  apply <file.jsonl>                           Apply JSONL log file operations
   entity create                                Create a new entity
   entity list                                  List all entities
   entity delete <entity-id>                    Delete an entity
@@ -57,11 +56,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = http_utils::StigmergyClient::new(base_url.clone());
 
     match free[0].as_str() {
-        "apply" => {
-            if let Err(e) = handle_apply_command(&free, &base_url).await {
-                cli_utils::exit_with_error(&format!("Apply command failed: {}", e));
-            }
-        }
         "entity" => {
             handle_entity_command(&free[1..], &client).await;
         }
@@ -76,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => {
             cli_utils::exit_with_error(&format!(
-                "Unknown command '{}'. Available commands: apply, entity, system, componentdefinition, component",
+                "Unknown command '{}'. Available commands: entity, system, componentdefinition, component",
                 free[0]
             ));
         }

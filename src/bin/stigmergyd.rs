@@ -1,6 +1,3 @@
-use std::path::PathBuf;
-use std::sync::Arc;
-
 use arrrg::CommandLine;
 use arrrg_derive::CommandLine;
 use axum::Router;
@@ -8,13 +5,14 @@ use tokio::net::TcpListener;
 use tokio::signal;
 
 use stigmergy::{
-    InMemoryDataStore, SavefileManager, create_component_router, create_system_router,
+    create_component_definition_router, create_component_instance_router, create_entity_router,
+    create_system_router,
 };
 
 #[derive(CommandLine, Default, PartialEq, Eq)]
 struct Args {
-    #[arrrg(optional, "Path to savefile for persistent state storage")]
-    savefile: Option<String>,
+    #[arrrg(optional, "PostgreSQL database URL")]
+    database_url: Option<String>,
     #[arrrg(optional, "Host to bind the HTTP server")]
     host: Option<String>,
     #[arrrg(optional, "Port to bind the HTTP server")]
@@ -29,7 +27,7 @@ USAGE:
     stigmergyd [OPTIONS]
 
 OPTIONS:
-    --savefile <PATH>    Path to savefile for persistent state storage [default: stigmergy.jsonl]
+    --database-url <URL> PostgreSQL database URL [env: DATABASE_URL]
     --host <HOST>        Host to bind the HTTP server [default: 127.0.0.1]
     --port <PORT>        Port to bind the HTTP server [default: 8080]
     --verbose            Enable verbose logging
@@ -86,26 +84,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if config.verbose {
         println!("Stigmergy daemon starting with configuration:");
-        println!("  Savefile: {}", config.savefile_path.display());
+        println!("  Database URL: {}", config.database_url);
         println!("  Bind address: {}:{}", config.host, config.port);
     }
 
-    // Initialize savefile manager and data storage
-    let logger = Arc::new(SavefileManager::new(config.savefile_path.clone()));
-    let data_store = Arc::new(InMemoryDataStore::new());
+    // Connect to PostgreSQL
+    let pool = sqlx::PgPool::connect(&config.database_url)
+        .await
+        .map_err(|e| format!("Failed to connect to database: {}", e))?;
 
     if config.verbose {
-        println!("Initialized savefile manager and data store");
+        println!("Connected to PostgreSQL database");
+    }
+
+    // Run migrations
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .map_err(|e| format!("Failed to run migrations: {}", e))?;
+
+    if config.verbose {
+        println!("Database migrations completed");
     }
 
     // Create routers
-    // TODO: Entity router now requires PostgreSQL connection pool
-    // let entity_router = create_entity_router(pool);
-    let component_router = create_component_router(logger.clone(), data_store.clone());
-    let system_router = create_system_router(logger.clone(), data_store.clone());
+    let entity_router = create_entity_router(pool.clone());
+    let component_definition_router = create_component_definition_router(pool.clone());
+    let component_router = create_component_instance_router(pool.clone());
+    let system_router = create_system_router(pool.clone());
 
     let app = Router::new()
-        // .nest("/api/v1", entity_router)
+        .nest("/api/v1", entity_router)
+        .nest("/api/v1", component_definition_router)
         .nest("/api/v1", component_router)
         .nest("/api/v1", system_router);
 
@@ -117,7 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("🚀 Stigmergy daemon started successfully!");
     println!("📡 Server listening on: http://{}", addr);
-    println!("💾 Savefile: {}", config.savefile_path.display());
+    println!("💾 Database: {}", config.database_url);
     println!("🔄 Ready to accept API requests");
 
     if config.verbose {
@@ -150,7 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if config.verbose {
                 println!("📊 Final statistics:");
-                println!("   Savefile: {}", config.savefile_path.display());
+                println!("   Database: {}", config.database_url);
                 println!("   Shutdown completed successfully");
             }
 
@@ -162,7 +172,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 struct ServerConfig {
-    savefile_path: PathBuf,
+    database_url: String,
     host: String,
     port: u16,
     verbose: bool,
@@ -170,11 +180,13 @@ struct ServerConfig {
 
 impl ServerConfig {
     fn from_args(args: Args) -> Self {
+        let database_url = args
+            .database_url
+            .or_else(|| std::env::var("DATABASE_URL").ok())
+            .unwrap_or_else(|| "postgres://localhost/stigmergy".to_string());
+
         Self {
-            savefile_path: args
-                .savefile
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("stigmergy.jsonl")),
+            database_url,
             host: args.host.unwrap_or_else(|| "127.0.0.1".to_string()),
             port: args.port.unwrap_or(8080),
             verbose: args.verbose,

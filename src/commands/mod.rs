@@ -10,10 +10,8 @@
 //! - `system` - System management commands (create, list, get, update, delete)
 //! - `component_definition` - Component definition commands (create, list, get, update, delete)
 //! - `component` - Component instance commands (create, list, get, update, delete)
-//! - `apply` - JSONL operation application commands
 //! - `shared` - Shared utilities and validation functions
 
-pub mod apply;
 pub mod component;
 pub mod component_definition;
 pub mod entity;
@@ -22,7 +20,6 @@ pub mod errors;
 pub mod shared;
 pub mod system;
 
-pub use apply::handle_apply_command;
 pub use component::handle_component_command;
 pub use component_definition::handle_componentdefinition_command;
 pub use entity::handle_entity_command;

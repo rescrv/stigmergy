@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT entity_id, component_name, data\n        FROM component_instances\n        ORDER BY entity_id ASC, component_name ASC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "entity_id",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 1,
+        "name": "component_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "data",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "6aa5d19c8b67b5da840eb593e3d64d04e7e6d52d69b926db903520b893206c9f"
+}

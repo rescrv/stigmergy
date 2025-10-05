@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        DELETE FROM component_instances\n        WHERE entity_id = $1 AND component_name = $2\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1fbdfcc849cded0b4f35ee077b3be499c40b3b5f4aadbea6166f17112c120b09"
+}
