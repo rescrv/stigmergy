@@ -546,140 +546,52 @@ fn validate_schema_structure(schema: &Value) -> Result<(), ValidationError> {
 ////////////////////////////////////////////// routes //////////////////////////////////////////////
 
 async fn get_component_definitions(
-    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
+    State(pool): State<sqlx::PgPool>,
     Query(_params): Query<HashMap<String, String>>,
 ) -> Result<Json<Vec<ComponentDefinition>>, (StatusCode, &'static str)> {
-    let definitions = match data_store.list_component_definitions() {
-        Ok(def_list) => def_list.into_iter().map(|(_id, def)| def).collect(),
-        Err(_) => vec![],
-    };
-
-    let save_entry = SaveEntry::new(
-        SaveOperation::ComponentDefinitionGet {
-            definition_id: None,
-            found: !definitions.is_empty(),
-        },
-        SaveMetadata::rest_api(None),
-    );
-    logger.save_or_error(&save_entry);
-    Ok(Json(definitions))
+    match crate::sql::component_definition::list(&pool).await {
+        Ok(definitions) => Ok(Json(definitions)),
+        Err(_) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to list component definitions",
+        )),
+    }
 }
 
 async fn create_component_definition(
-    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
+    State(pool): State<sqlx::PgPool>,
     ComponentDefinitionExtractor(definition): ComponentDefinitionExtractor,
 ) -> Result<Json<ComponentDefinition>, (StatusCode, &'static str)> {
-    let validation_result = match definition.validate_schema() {
-        Ok(()) => LogValidationResult::success(),
-        Err(e) => {
-            let save_entry = SaveEntry::new(
-                SaveOperation::ComponentDefinitionCreate {
-                    definition: definition.clone(),
-                    validation_result: LogValidationResult::failed(e.to_string()),
-                },
-                SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
-            );
-            logger.save_or_error(&save_entry);
-            return Err((StatusCode::BAD_REQUEST, "invalid schema"));
-        }
-    };
-
-    let result = DataStoreOperations::create_component_definition(
-        &*data_store,
-        &definition.component,
-        &definition,
-    );
-    if !result.success {
-        let save_entry = SaveEntry::new(
-            SaveOperation::ComponentDefinitionCreate {
-                definition: definition.clone(),
-                validation_result,
-            },
-            SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
-        );
-        logger.save_or_error(&save_entry);
-        return Err(match result.into_error() {
-            crate::DataStoreError::AlreadyExists => (StatusCode::CONFLICT, "already exists"),
-            _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal server error"),
-        });
+    if let Err(_e) = definition.validate_schema() {
+        return Err((StatusCode::BAD_REQUEST, "invalid schema"));
     }
 
-    let save_entry = SaveEntry::new(
-        SaveOperation::ComponentDefinitionCreate {
-            definition: definition.clone(),
-            validation_result,
-        },
-        SaveMetadata::rest_api(None),
-    );
-    logger.save_or_error(&save_entry);
-
-    Ok(Json(definition))
+    match crate::sql::component_definition::create(&pool, &definition).await {
+        Ok(()) => Ok(Json(definition)),
+        Err(crate::DataStoreError::AlreadyExists) => Err((StatusCode::CONFLICT, "already exists")),
+        Err(_) => Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error")),
+    }
 }
 
 async fn update_component_definition(
-    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
+    State(pool): State<sqlx::PgPool>,
     ComponentDefinitionExtractor(definition): ComponentDefinitionExtractor,
 ) -> Result<Json<ComponentDefinition>, (StatusCode, &'static str)> {
-    let validation_result = match definition.validate_schema() {
-        Ok(()) => LogValidationResult::success(),
-        Err(e) => {
-            let save_entry = SaveEntry::new(
-                SaveOperation::ComponentDefinitionUpdate {
-                    definition_id: format!("{:?}", definition.component),
-                    old_definition: None,
-                    new_definition: definition.clone(),
-                    validation_result: LogValidationResult::failed(e.to_string()),
-                },
-                SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
-            );
-            logger.save_or_error(&save_entry);
-            return Err((StatusCode::BAD_REQUEST, "invalid schema"));
-        }
-    };
-
-    let def_id = definition.component.as_str().to_string();
-    let old_definition = data_store
-        .get_component_definition(&definition.component)
-        .ok()
-        .flatten();
-    let result = DataStoreOperations::update_component_definition(
-        &*data_store,
-        &definition.component,
-        &definition,
-    );
-    if !result.success {
-        let save_entry = SaveEntry::new(
-            SaveOperation::ComponentDefinitionUpdate {
-                definition_id: def_id,
-                old_definition,
-                new_definition: definition.clone(),
-                validation_result,
-            },
-            SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
-        );
-        logger.save_or_error(&save_entry);
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "failed to update component definition",
-        ));
+    if let Err(_e) = definition.validate_schema() {
+        return Err((StatusCode::BAD_REQUEST, "invalid schema"));
     }
 
-    let save_entry = SaveEntry::new(
-        SaveOperation::ComponentDefinitionUpdate {
-            definition_id: def_id,
-            old_definition,
-            new_definition: definition.clone(),
-            validation_result,
-        },
-        SaveMetadata::rest_api(None),
-    );
-    logger.save_or_error(&save_entry);
-
-    Ok(Json(definition))
+    match crate::sql::component_definition::update(&pool, &definition).await {
+        Ok(_) => Ok(Json(definition)),
+        Err(_) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to update component definition",
+        )),
+    }
 }
 
 async fn patch_component_definition(
-    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
+    State(pool): State<sqlx::PgPool>,
     Json(patch): Json<Value>,
 ) -> Result<Json<ComponentDefinition>, (StatusCode, &'static str)> {
     let component = Component::new("PatchedComponent").unwrap();
@@ -688,224 +600,110 @@ async fn patch_component_definition(
         schema: patch.clone(),
     };
 
-    let def_id = "PatchedComponent".to_string();
-    let result =
-        DataStoreOperations::update_component_definition(&*data_store, &component, &definition);
-    if !result.success {
-        let save_entry = SaveEntry::new(
-            SaveOperation::ComponentDefinitionPatch {
-                definition_id: def_id,
-                patch_data: patch,
-                result_definition: definition.clone(),
-            },
-            SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
-        );
-        logger.save_or_error(&save_entry);
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error"));
+    // Validate the schema
+    if let Err(_e) = definition.validate_schema() {
+        return Err((StatusCode::BAD_REQUEST, "invalid schema"));
     }
 
-    let save_entry = SaveEntry::new(
-        SaveOperation::ComponentDefinitionPatch {
-            definition_id: def_id,
-            patch_data: patch,
-            result_definition: definition.clone(),
-        },
-        SaveMetadata::rest_api(None),
-    );
-    logger.save_or_error(&save_entry);
-
-    Ok(Json(definition))
+    match crate::sql::component_definition::update(&pool, &definition).await {
+        Ok(_) => Ok(Json(definition)),
+        Err(_) => Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error")),
+    }
 }
 
 async fn delete_component_definitions(
-    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
+    State(pool): State<sqlx::PgPool>,
 ) -> Result<StatusCode, (StatusCode, &'static str)> {
-    let result = DataStoreOperations::delete_all_component_definitions(&*data_store);
-    let count_deleted = if result.success {
-        result.data.unwrap_or(0)
-    } else {
-        let save_entry = SaveEntry::new(
-            SaveOperation::ComponentDefinitionDeleteAll { count_deleted: 0 },
-            SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
-        );
-        logger.save_or_error(&save_entry);
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error"));
+    // List all definitions and delete them one by one
+    let definitions = match crate::sql::component_definition::list(&pool).await {
+        Ok(defs) => defs,
+        Err(_) => return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error")),
     };
 
-    let save_entry = SaveEntry::new(
-        SaveOperation::ComponentDefinitionDeleteAll { count_deleted },
-        SaveMetadata::rest_api(None),
-    );
-    logger.save_or_error(&save_entry);
+    for definition in definitions {
+        if crate::sql::component_definition::delete(&pool, &definition.component)
+            .await
+            .is_err()
+        {
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error"));
+        }
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn get_component_definition_by_id(
-    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
+    State(pool): State<sqlx::PgPool>,
     Path(id): Path<String>,
 ) -> Result<Json<ComponentDefinition>, (StatusCode, &'static str)> {
     let component =
         Component::new(&id).ok_or((StatusCode::BAD_REQUEST, "invalid component name"))?;
-    let definition = match data_store.get_component_definition(&component) {
-        Ok(Some(def)) => def,
-        Ok(None) | Err(_) => {
-            let save_entry = SaveEntry::new(
-                SaveOperation::ComponentDefinitionGet {
-                    definition_id: Some(id),
-                    found: false,
-                },
-                SaveMetadata::rest_api(None),
-            );
-            logger.save_or_error(&save_entry);
-            return Err((StatusCode::NOT_FOUND, "not found"));
-        }
-    };
 
-    let save_entry = SaveEntry::new(
-        SaveOperation::ComponentDefinitionGet {
-            definition_id: Some(id),
-            found: true,
-        },
-        SaveMetadata::rest_api(None),
-    );
-    logger.save_or_error(&save_entry);
-
-    Ok(Json(definition))
+    match crate::sql::component_definition::get(&pool, &component).await {
+        Ok(Some(record)) => Ok(Json(record.definition)),
+        Ok(None) => Err((StatusCode::NOT_FOUND, "not found")),
+        Err(_) => Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error")),
+    }
 }
 
 async fn update_component_definition_by_id(
-    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
+    State(pool): State<sqlx::PgPool>,
     Path(id): Path<String>,
     ComponentDefinitionExtractor(definition): ComponentDefinitionExtractor,
 ) -> Result<Json<ComponentDefinition>, (StatusCode, &'static str)> {
     let component =
         Component::new(&id).ok_or((StatusCode::BAD_REQUEST, "invalid component name"))?;
 
-    let validation_result = match definition.validate_schema() {
-        Ok(()) => LogValidationResult::success(),
-        Err(e) => {
-            let save_entry = SaveEntry::new(
-                SaveOperation::ComponentDefinitionUpdate {
-                    definition_id: id.clone(),
-                    old_definition: None,
-                    new_definition: definition.clone(),
-                    validation_result: LogValidationResult::failed(e.to_string()),
-                },
-                SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
-            );
-            logger.save_or_error(&save_entry);
-            return Err((StatusCode::BAD_REQUEST, "invalid schema"));
-        }
-    };
-
-    let old_definition = data_store
-        .get_component_definition(&component)
-        .ok()
-        .flatten();
-    let result =
-        DataStoreOperations::update_component_definition(&*data_store, &component, &definition);
-    if !result.success {
-        let save_entry = SaveEntry::new(
-            SaveOperation::ComponentDefinitionUpdate {
-                definition_id: id.clone(),
-                old_definition,
-                new_definition: definition.clone(),
-                validation_result,
-            },
-            SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
-        );
-        logger.save_or_error(&save_entry);
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error"));
+    if let Err(_e) = definition.validate_schema() {
+        return Err((StatusCode::BAD_REQUEST, "invalid schema"));
     }
 
-    let save_entry = SaveEntry::new(
-        SaveOperation::ComponentDefinitionUpdate {
-            definition_id: id,
-            old_definition,
-            new_definition: definition.clone(),
-            validation_result,
-        },
-        SaveMetadata::rest_api(None),
-    );
-    logger.save_or_error(&save_entry);
+    // Verify the component in the path matches the definition
+    if component != definition.component {
+        return Err((StatusCode::BAD_REQUEST, "component name mismatch"));
+    }
 
-    Ok(Json(definition))
+    match crate::sql::component_definition::update(&pool, &definition).await {
+        Ok(_) => Ok(Json(definition)),
+        Err(_) => Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error")),
+    }
 }
 
 async fn patch_component_definition_by_id(
-    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
+    State(pool): State<sqlx::PgPool>,
     Path(id): Path<String>,
     Json(patch): Json<Value>,
 ) -> Result<Json<ComponentDefinition>, (StatusCode, &'static str)> {
-    let component = Component::new(format!("Component{}", id))
-        .unwrap_or_else(|| Component::new("PatchedComponent").unwrap());
+    let component =
+        Component::new(&id).ok_or((StatusCode::BAD_REQUEST, "invalid component name"))?;
     let definition = ComponentDefinition {
         component: component.clone(),
         schema: patch.clone(),
     };
 
-    let result =
-        DataStoreOperations::update_component_definition(&*data_store, &component, &definition);
-    if !result.success {
-        let save_entry = SaveEntry::new(
-            SaveOperation::ComponentDefinitionPatch {
-                definition_id: id.clone(),
-                patch_data: patch,
-                result_definition: definition.clone(),
-            },
-            SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
-        );
-        logger.save_or_error(&save_entry);
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error"));
+    // Validate the schema
+    if let Err(_e) = definition.validate_schema() {
+        return Err((StatusCode::BAD_REQUEST, "invalid schema"));
     }
 
-    let save_entry = SaveEntry::new(
-        SaveOperation::ComponentDefinitionPatch {
-            definition_id: id,
-            patch_data: patch,
-            result_definition: definition.clone(),
-        },
-        SaveMetadata::rest_api(None),
-    );
-    logger.save_or_error(&save_entry);
-
-    Ok(Json(definition))
+    match crate::sql::component_definition::update(&pool, &definition).await {
+        Ok(_) => Ok(Json(definition)),
+        Err(_) => Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error")),
+    }
 }
 
 async fn delete_component_definition_by_id(
-    State((logger, data_store)): State<(Arc<SavefileManager>, Arc<dyn DataStore>)>,
+    State(pool): State<sqlx::PgPool>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, &'static str)> {
     let component =
         Component::new(&id).ok_or((StatusCode::BAD_REQUEST, "invalid component name"))?;
-    let deleted_definition = data_store
-        .get_component_definition(&component)
-        .ok()
-        .flatten();
-    let result = DataStoreOperations::delete_component_definition(&*data_store, &component);
-    if !result.success {
-        let save_entry = SaveEntry::new(
-            SaveOperation::ComponentDefinitionDelete {
-                definition_id: id.clone(),
-                deleted_definition,
-            },
-            SaveMetadata::rest_api(None).with_status(OperationStatus::Failed),
-        );
-        logger.save_or_error(&save_entry);
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error"));
+
+    match crate::sql::component_definition::delete(&pool, &component).await {
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Err((StatusCode::NOT_FOUND, "not found")),
+        Err(_) => Err((StatusCode::INTERNAL_SERVER_ERROR, "internal server error")),
     }
-
-    let save_entry = SaveEntry::new(
-        SaveOperation::ComponentDefinitionDelete {
-            definition_id: id,
-            deleted_definition,
-        },
-        SaveMetadata::rest_api(None),
-    );
-    logger.save_or_error(&save_entry);
-
-    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn get_components_for_entity(
@@ -1385,8 +1183,9 @@ async fn delete_component_by_id_for_entity(
 /// updating, and deleting both component definitions and component instances.
 ///
 /// # Arguments
-/// * `logger` - Shared savefile manager for operation logging
-/// * `data_store` - Shared data store for component storage
+/// * `pool` - PostgreSQL connection pool for component definition operations
+/// * `logger` - Shared savefile manager for operation logging (component instances)
+/// * `data_store` - Shared data store for component instance storage
 ///
 /// # Returns
 /// An Axum Router configured with all component-related endpoints
@@ -1409,21 +1208,27 @@ async fn delete_component_by_id_for_entity(
 /// - `GET /component` - List all component instances
 ///
 /// # Examples
-/// ```rust
-/// use stigmergy::{create_component_router, SavefileManager, InMemoryDataStore};
-/// use std::sync::Arc;
-/// use std::path::PathBuf;
-///
+/// ```no_run
+/// # use stigmergy::{create_component_router, SavefileManager, InMemoryDataStore};
+/// # use std::sync::Arc;
+/// # use std::path::PathBuf;
+/// # use sqlx::PgPool;
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// # let database_url = "postgres://localhost/stigmergy";
+/// let pool = PgPool::connect(database_url).await?;
 /// let logger = Arc::new(SavefileManager::new(PathBuf::from("test.jsonl")));
 /// let store = Arc::new(InMemoryDataStore::new());
-/// let router = create_component_router(logger, store);
-/// // Router can be used with an Axum server
+/// let router = create_component_router(pool, logger, store);
+/// # Ok(())
+/// # }
 /// ```
 pub fn create_component_router(
+    pool: sqlx::PgPool,
     logger: Arc<SavefileManager>,
     data_store: Arc<dyn DataStore>,
 ) -> Router {
-    Router::new()
+    // Component definition routes use PostgreSQL
+    let component_def_router = Router::new()
         .route(
             "/componentdefinition",
             get(get_component_definitions)
@@ -1439,6 +1244,10 @@ pub fn create_component_router(
                 .patch(patch_component_definition_by_id)
                 .delete(delete_component_definition_by_id),
         )
+        .with_state(pool);
+
+    // Component instance routes use data store
+    let component_instance_router = Router::new()
         .route(
             "/entity/:entity_id/component",
             get(get_components_for_entity)
@@ -1454,7 +1263,12 @@ pub fn create_component_router(
                 .patch(patch_component_by_id_for_entity)
                 .delete(delete_component_by_id_for_entity),
         )
-        .with_state((logger, data_store))
+        .with_state((logger, data_store));
+
+    // Merge both routers
+    Router::new()
+        .merge(component_def_router)
+        .merge(component_instance_router)
 }
 
 #[cfg(test)]
