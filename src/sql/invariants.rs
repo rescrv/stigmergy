@@ -4,7 +4,7 @@
 //! with automatic timestamp tracking for created_at and updated_at fields.
 
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
+use sqlx::{Postgres, Transaction};
 
 use crate::{DataStoreError, InvariantID};
 
@@ -29,7 +29,7 @@ pub struct InvariantRecord {
 /// The `created_at` and `updated_at` timestamps are automatically set to the current time.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 /// * `invariant_id` - The invariant identifier to create
 /// * `asserts` - The assertion expression as a string
 ///
@@ -44,11 +44,17 @@ pub struct InvariantRecord {
 /// # use sqlx::PgPool;
 /// # async fn example(pool: PgPool) -> Result<(), Box<dyn std::error::Error>> {
 /// let invariant_id = InvariantID::new([1u8; 32]);
-/// sql::invariants::create(&pool, &invariant_id, "x > 0 && y < 100").await?;
+/// let mut tx = pool.begin().await?;
+/// sql::invariants::create(&mut tx, &invariant_id, "x > 0 && y < 100").await?;
+/// tx.commit().await?;
 /// # Ok(())
 /// # }
 /// ```
-pub async fn create(pool: &PgPool, invariant_id: &InvariantID, asserts: &str) -> SqlResult<()> {
+pub async fn create(
+    tx: &mut Transaction<'_, Postgres>,
+    invariant_id: &InvariantID,
+    asserts: &str,
+) -> SqlResult<()> {
     let invariant_bytes = invariant_id.as_bytes();
 
     let result = sqlx::query!(
@@ -59,7 +65,7 @@ pub async fn create(pool: &PgPool, invariant_id: &InvariantID, asserts: &str) ->
         invariant_bytes.as_slice(),
         asserts
     )
-    .execute(pool)
+    .execute(&mut **tx)
     .await;
 
     match result {
@@ -77,14 +83,17 @@ pub async fn create(pool: &PgPool, invariant_id: &InvariantID, asserts: &str) ->
 /// Retrieves an invariant from the database.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 /// * `invariant_id` - The invariant to retrieve
 ///
 /// # Returns
 /// * `Ok(Some(InvariantRecord))` - Invariant found
 /// * `Ok(None)` - Invariant not found
 /// * `Err(DataStoreError::Internal)` - Database error
-pub async fn get(pool: &PgPool, invariant_id: &InvariantID) -> SqlResult<Option<InvariantRecord>> {
+pub async fn get(
+    tx: &mut Transaction<'_, Postgres>,
+    invariant_id: &InvariantID,
+) -> SqlResult<Option<InvariantRecord>> {
     let invariant_bytes = invariant_id.as_bytes();
 
     let result = sqlx::query!(
@@ -95,7 +104,7 @@ pub async fn get(pool: &PgPool, invariant_id: &InvariantID) -> SqlResult<Option<
         "#,
         invariant_bytes.as_slice()
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut **tx)
     .await;
 
     match result {
@@ -123,7 +132,7 @@ pub async fn get(pool: &PgPool, invariant_id: &InvariantID) -> SqlResult<Option<
 /// Updates the assertion for an existing invariant.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 /// * `invariant_id` - The invariant to update
 /// * `asserts` - The new assertion expression as a string
 ///
@@ -131,7 +140,11 @@ pub async fn get(pool: &PgPool, invariant_id: &InvariantID) -> SqlResult<Option<
 /// * `Ok(true)` - Invariant existed and was updated
 /// * `Ok(false)` - Invariant did not exist
 /// * `Err(DataStoreError::Internal)` - Database error
-pub async fn update(pool: &PgPool, invariant_id: &InvariantID, asserts: &str) -> SqlResult<bool> {
+pub async fn update(
+    tx: &mut Transaction<'_, Postgres>,
+    invariant_id: &InvariantID,
+    asserts: &str,
+) -> SqlResult<bool> {
     let invariant_bytes = invariant_id.as_bytes();
 
     let result = sqlx::query!(
@@ -143,7 +156,7 @@ pub async fn update(pool: &PgPool, invariant_id: &InvariantID, asserts: &str) ->
         invariant_bytes.as_slice(),
         asserts
     )
-    .execute(pool)
+    .execute(&mut **tx)
     .await;
 
     match result {
@@ -158,14 +171,17 @@ pub async fn update(pool: &PgPool, invariant_id: &InvariantID, asserts: &str) ->
 /// Deletes an invariant from the database.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 /// * `invariant_id` - The invariant to delete
 ///
 /// # Returns
 /// * `Ok(true)` - Invariant existed and was deleted
 /// * `Ok(false)` - Invariant did not exist
 /// * `Err(DataStoreError::Internal)` - Database error
-pub async fn delete(pool: &PgPool, invariant_id: &InvariantID) -> SqlResult<bool> {
+pub async fn delete(
+    tx: &mut Transaction<'_, Postgres>,
+    invariant_id: &InvariantID,
+) -> SqlResult<bool> {
     let invariant_bytes = invariant_id.as_bytes();
 
     let result = sqlx::query!(
@@ -175,7 +191,7 @@ pub async fn delete(pool: &PgPool, invariant_id: &InvariantID) -> SqlResult<bool
         "#,
         invariant_bytes.as_slice()
     )
-    .execute(pool)
+    .execute(&mut **tx)
     .await;
 
     match result {
@@ -190,12 +206,12 @@ pub async fn delete(pool: &PgPool, invariant_id: &InvariantID) -> SqlResult<bool
 /// Lists all invariants in the database.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 ///
 /// # Returns
 /// * `Ok(Vec<InvariantRecord>)` - List of all invariants
 /// * `Err(DataStoreError::Internal)` - Database error
-pub async fn list(pool: &PgPool) -> SqlResult<Vec<InvariantRecord>> {
+pub async fn list(tx: &mut Transaction<'_, Postgres>) -> SqlResult<Vec<InvariantRecord>> {
     let result = sqlx::query!(
         r#"
         SELECT invariant_id, asserts, created_at, updated_at
@@ -203,7 +219,7 @@ pub async fn list(pool: &PgPool) -> SqlResult<Vec<InvariantRecord>> {
         ORDER BY created_at ASC
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut **tx)
     .await;
 
     match result {
@@ -263,14 +279,18 @@ mod tests {
             .await
             .unwrap();
 
-        create(&pool, &invariant_id, asserts).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        create(&mut tx, &invariant_id, asserts).await.unwrap();
+        tx.commit().await.unwrap();
 
         let db_after = sqlx::query_scalar::<_, DateTime<Utc>>("SELECT CURRENT_TIMESTAMP")
             .fetch_one(&pool)
             .await
             .unwrap();
 
-        let record = get(&pool, &invariant_id).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let record = get(&mut tx, &invariant_id).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(record.is_some());
         let record = record.unwrap();
         assert_eq!(record.invariant_id, invariant_id);
@@ -287,9 +307,12 @@ mod tests {
         let pool = super::super::tests::setup_test_db().await;
         let invariant_id = unique_invariant("create_duplicate_fails");
 
-        create(&pool, &invariant_id, "x > 0").await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        create(&mut tx, &invariant_id, "x > 0").await.unwrap();
+        tx.commit().await.unwrap();
 
-        let result = create(&pool, &invariant_id, "y > 0").await;
+        let mut tx = pool.begin().await.unwrap();
+        let result = create(&mut tx, &invariant_id, "y > 0").await;
         assert!(matches!(result, Err(DataStoreError::AlreadyExists)));
     }
 
@@ -298,18 +321,26 @@ mod tests {
         let pool = super::super::tests::setup_test_db().await;
         let invariant_id = unique_invariant("update_existing");
 
-        create(&pool, &invariant_id, "x > 0").await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        create(&mut tx, &invariant_id, "x > 0").await.unwrap();
+        tx.commit().await.unwrap();
 
-        let record_before = get(&pool, &invariant_id).await.unwrap().unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let record_before = get(&mut tx, &invariant_id).await.unwrap().unwrap();
+        tx.commit().await.unwrap();
         assert_eq!(record_before.asserts, "x > 0");
         assert_eq!(record_before.created_at, record_before.updated_at);
 
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-        let updated = update(&pool, &invariant_id, "y < 100").await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let updated = update(&mut tx, &invariant_id, "y < 100").await.unwrap();
+        tx.commit().await.unwrap();
         assert!(updated);
 
-        let record_after = get(&pool, &invariant_id).await.unwrap().unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let record_after = get(&mut tx, &invariant_id).await.unwrap().unwrap();
+        tx.commit().await.unwrap();
         assert_eq!(record_after.asserts, "y < 100");
         assert_eq!(record_after.created_at, record_before.created_at);
         assert!(record_after.updated_at > record_before.updated_at);
@@ -320,7 +351,9 @@ mod tests {
         let pool = super::super::tests::setup_test_db().await;
         let invariant_id = unique_invariant("update_nonexistent");
 
-        let updated = update(&pool, &invariant_id, "x > 0").await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let updated = update(&mut tx, &invariant_id, "x > 0").await.unwrap();
+        tx.commit().await.unwrap();
         assert!(!updated);
     }
 
@@ -329,12 +362,18 @@ mod tests {
         let pool = super::super::tests::setup_test_db().await;
         let invariant_id = unique_invariant("delete_existing");
 
-        create(&pool, &invariant_id, "x > 0").await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        create(&mut tx, &invariant_id, "x > 0").await.unwrap();
+        tx.commit().await.unwrap();
 
-        let deleted = delete(&pool, &invariant_id).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let deleted = delete(&mut tx, &invariant_id).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(deleted);
 
-        let record = get(&pool, &invariant_id).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let record = get(&mut tx, &invariant_id).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(record.is_none());
     }
 
@@ -343,7 +382,9 @@ mod tests {
         let pool = super::super::tests::setup_test_db().await;
         let invariant_id = unique_invariant("delete_nonexistent");
 
-        let deleted = delete(&pool, &invariant_id).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let deleted = delete(&mut tx, &invariant_id).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(!deleted);
     }
 
@@ -354,11 +395,15 @@ mod tests {
         let invariant2 = unique_invariant("list_multiple_2");
         let invariant3 = unique_invariant("list_multiple_3");
 
-        create(&pool, &invariant1, "x > 0").await.unwrap();
-        create(&pool, &invariant2, "y > 0").await.unwrap();
-        create(&pool, &invariant3, "z > 0").await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        create(&mut tx, &invariant1, "x > 0").await.unwrap();
+        create(&mut tx, &invariant2, "y > 0").await.unwrap();
+        create(&mut tx, &invariant3, "z > 0").await.unwrap();
+        tx.commit().await.unwrap();
 
-        let invariants = list(&pool).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let invariants = list(&mut tx).await.unwrap();
+        tx.commit().await.unwrap();
         let ids: Vec<_> = invariants.iter().map(|r| r.invariant_id).collect();
         assert!(ids.contains(&invariant1));
         assert!(ids.contains(&invariant2));

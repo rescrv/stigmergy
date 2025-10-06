@@ -4,7 +4,7 @@
 //! with automatic timestamp tracking for created_at and updated_at fields.
 
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
+use sqlx::{Postgres, Transaction};
 
 use crate::{Component, ComponentDefinition, DataStoreError};
 
@@ -27,7 +27,7 @@ pub struct ComponentDefinitionRecord {
 /// The `created_at` and `updated_at` timestamps are automatically set to the current time.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 /// * `definition` - The component definition to create
 ///
 /// # Returns
@@ -46,11 +46,16 @@ pub struct ComponentDefinitionRecord {
 ///     component.clone(),
 ///     json!({"type": "object"})
 /// );
-/// sql::component_definition::create(&pool, &definition).await?;
+/// let mut tx = pool.begin().await?;
+/// sql::component_definition::create(&mut tx, &definition).await?;
+/// tx.commit().await?;
 /// # Ok(())
 /// # }
 /// ```
-pub async fn create(pool: &PgPool, definition: &ComponentDefinition) -> SqlResult<()> {
+pub async fn create(
+    tx: &mut Transaction<'_, Postgres>,
+    definition: &ComponentDefinition,
+) -> SqlResult<()> {
     let component_name = definition.component.as_str();
     let schema = serde_json::to_value(&definition.schema)
         .map_err(|e| DataStoreError::SerializationError(e.to_string()))?;
@@ -63,7 +68,7 @@ pub async fn create(pool: &PgPool, definition: &ComponentDefinition) -> SqlResul
         component_name,
         schema
     )
-    .execute(pool)
+    .execute(&mut **tx)
     .await;
 
     match result {
@@ -81,7 +86,7 @@ pub async fn create(pool: &PgPool, definition: &ComponentDefinition) -> SqlResul
 /// Retrieves a component definition from the database.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 /// * `component` - The component type identifier
 ///
 /// # Returns
@@ -89,7 +94,7 @@ pub async fn create(pool: &PgPool, definition: &ComponentDefinition) -> SqlResul
 /// * `Ok(None)` - Component definition not found
 /// * `Err(DataStoreError::Internal)` - Database error
 pub async fn get(
-    pool: &PgPool,
+    tx: &mut Transaction<'_, Postgres>,
     component: &Component,
 ) -> SqlResult<Option<ComponentDefinitionRecord>> {
     let component_name = component.as_str();
@@ -102,7 +107,7 @@ pub async fn get(
         "#,
         component_name
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut **tx)
     .await;
 
     match result {
@@ -130,14 +135,17 @@ pub async fn get(
 /// Updates an existing component definition in the database.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 /// * `definition` - The new component definition
 ///
 /// # Returns
 /// * `Ok(true)` - Component definition existed and was updated
 /// * `Ok(false)` - Component definition did not exist
 /// * `Err(DataStoreError::Internal)` - Database error
-pub async fn update(pool: &PgPool, definition: &ComponentDefinition) -> SqlResult<bool> {
+pub async fn update(
+    tx: &mut Transaction<'_, Postgres>,
+    definition: &ComponentDefinition,
+) -> SqlResult<bool> {
     let component_name = definition.component.as_str();
     let schema = serde_json::to_value(&definition.schema)
         .map_err(|e| DataStoreError::SerializationError(e.to_string()))?;
@@ -151,7 +159,7 @@ pub async fn update(pool: &PgPool, definition: &ComponentDefinition) -> SqlResul
         component_name,
         schema
     )
-    .execute(pool)
+    .execute(&mut **tx)
     .await;
 
     match result {
@@ -168,14 +176,14 @@ pub async fn update(pool: &PgPool, definition: &ComponentDefinition) -> SqlResul
 /// This will cascade delete all associated component instances and messages.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 /// * `component` - The component type identifier
 ///
 /// # Returns
 /// * `Ok(true)` - Component definition existed and was deleted
 /// * `Ok(false)` - Component definition did not exist
 /// * `Err(DataStoreError::Internal)` - Database error
-pub async fn delete(pool: &PgPool, component: &Component) -> SqlResult<bool> {
+pub async fn delete(tx: &mut Transaction<'_, Postgres>, component: &Component) -> SqlResult<bool> {
     let component_name = component.as_str();
 
     let result = sqlx::query!(
@@ -185,7 +193,7 @@ pub async fn delete(pool: &PgPool, component: &Component) -> SqlResult<bool> {
         "#,
         component_name
     )
-    .execute(pool)
+    .execute(&mut **tx)
     .await;
 
     match result {
@@ -200,12 +208,12 @@ pub async fn delete(pool: &PgPool, component: &Component) -> SqlResult<bool> {
 /// Lists all component definitions in the database.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 ///
 /// # Returns
 /// * `Ok(Vec<ComponentDefinition>)` - List of all component definitions
 /// * `Err(DataStoreError::Internal)` - Database error
-pub async fn list(pool: &PgPool) -> SqlResult<Vec<ComponentDefinition>> {
+pub async fn list(tx: &mut Transaction<'_, Postgres>) -> SqlResult<Vec<ComponentDefinition>> {
     let result = sqlx::query!(
         r#"
         SELECT component_name, schema
@@ -213,7 +221,7 @@ pub async fn list(pool: &PgPool) -> SqlResult<Vec<ComponentDefinition>> {
         ORDER BY created_at ASC
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut **tx)
     .await;
 
     match result {
@@ -259,14 +267,18 @@ mod tests {
             .await
             .unwrap();
 
-        create(&pool, &definition).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        create(&mut tx, &definition).await.unwrap();
+        tx.commit().await.unwrap();
 
         let db_after = sqlx::query_scalar::<_, DateTime<Utc>>("SELECT CURRENT_TIMESTAMP")
             .fetch_one(&pool)
             .await
             .unwrap();
 
-        let record = get(&pool, &component).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let record = get(&mut tx, &component).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(record.is_some());
         let record = record.unwrap();
         assert_eq!(record.definition.component, component);
@@ -285,9 +297,12 @@ mod tests {
         let schema = json!({"type": "object"});
         let definition = ComponentDefinition::new(component.clone(), schema);
 
-        create(&pool, &definition).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        create(&mut tx, &definition).await.unwrap();
+        tx.commit().await.unwrap();
 
-        let result = create(&pool, &definition).await;
+        let mut tx = pool.begin().await.unwrap();
+        let result = create(&mut tx, &definition).await;
         assert!(matches!(result, Err(DataStoreError::AlreadyExists)));
     }
 
@@ -298,19 +313,27 @@ mod tests {
         let schema1 = json!({"type": "object"});
         let definition1 = ComponentDefinition::new(component.clone(), schema1);
 
-        create(&pool, &definition1).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        create(&mut tx, &definition1).await.unwrap();
+        tx.commit().await.unwrap();
 
-        let record_before = get(&pool, &component).await.unwrap().unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let record_before = get(&mut tx, &component).await.unwrap().unwrap();
+        tx.commit().await.unwrap();
         assert_eq!(record_before.created_at, record_before.updated_at);
 
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
         let schema2 = json!({"type": "string"});
         let definition2 = ComponentDefinition::new(component.clone(), schema2.clone());
-        let updated = update(&pool, &definition2).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let updated = update(&mut tx, &definition2).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(updated);
 
-        let record_after = get(&pool, &component).await.unwrap().unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let record_after = get(&mut tx, &component).await.unwrap().unwrap();
+        tx.commit().await.unwrap();
         assert_eq!(record_after.definition.schema, schema2);
         assert_eq!(record_after.created_at, record_before.created_at);
         assert!(record_after.updated_at > record_before.updated_at);
@@ -323,7 +346,9 @@ mod tests {
         let schema = json!({"type": "object"});
         let definition = ComponentDefinition::new(component.clone(), schema);
 
-        let updated = update(&pool, &definition).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let updated = update(&mut tx, &definition).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(!updated);
     }
 
@@ -334,12 +359,18 @@ mod tests {
         let schema = json!({"type": "object"});
         let definition = ComponentDefinition::new(component.clone(), schema);
 
-        create(&pool, &definition).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        create(&mut tx, &definition).await.unwrap();
+        tx.commit().await.unwrap();
 
-        let deleted = delete(&pool, &component).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let deleted = delete(&mut tx, &component).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(deleted);
 
-        let record = get(&pool, &component).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let record = get(&mut tx, &component).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(record.is_none());
     }
 
@@ -348,7 +379,9 @@ mod tests {
         let pool = super::super::tests::setup_test_db().await;
         let component = unique_component("delete_nonexistent", std::process::id() as u64);
 
-        let deleted = delete(&pool, &component).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let deleted = delete(&mut tx, &component).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(!deleted);
     }
 
@@ -365,11 +398,15 @@ mod tests {
         let definition2 = ComponentDefinition::new(component2.clone(), schema.clone());
         let definition3 = ComponentDefinition::new(component3.clone(), schema);
 
-        create(&pool, &definition1).await.unwrap();
-        create(&pool, &definition2).await.unwrap();
-        create(&pool, &definition3).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        create(&mut tx, &definition1).await.unwrap();
+        create(&mut tx, &definition2).await.unwrap();
+        create(&mut tx, &definition3).await.unwrap();
+        tx.commit().await.unwrap();
 
-        let definitions = list(&pool).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let definitions = list(&mut tx).await.unwrap();
+        tx.commit().await.unwrap();
         let components: Vec<_> = definitions.iter().map(|d| &d.component).collect();
         assert!(components.contains(&&component1));
         assert!(components.contains(&&component2));

@@ -558,8 +558,21 @@ async fn create_entity(
         })?,
     };
 
-    match crate::sql::entity::create(&pool, &entity).await {
+    let mut tx = pool.begin().await.map_err(|_e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to begin transaction",
+        )
+    })?;
+
+    match crate::sql::entity::create(&mut tx, &entity).await {
         Ok(()) => {
+            tx.commit().await.map_err(|_e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to commit transaction",
+                )
+            })?;
             let response = CreateEntityResponse {
                 entity,
                 created: true,
@@ -603,8 +616,23 @@ async fn delete_entity(
     let entity = Entity::from_str(&entity_string)
         .map_err(|_parse_error| (StatusCode::BAD_REQUEST, "invalid entity id"))?;
 
-    match crate::sql::entity::delete(&pool, &entity).await {
-        Ok(true) => Ok(StatusCode::NO_CONTENT),
+    let mut tx = pool.begin().await.map_err(|_e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to begin transaction",
+        )
+    })?;
+
+    match crate::sql::entity::delete(&mut tx, &entity).await {
+        Ok(true) => {
+            tx.commit().await.map_err(|_e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to commit transaction",
+                )
+            })?;
+            Ok(StatusCode::NO_CONTENT)
+        }
         Ok(false) => Err((StatusCode::NOT_FOUND, "entity not found")),
         Err(_) => Err((StatusCode::INTERNAL_SERVER_ERROR, "failed to delete entity")),
     }
@@ -635,8 +663,23 @@ async fn delete_entity(
 async fn list_entities(
     State(pool): State<sqlx::PgPool>,
 ) -> Result<Json<Vec<Entity>>, (StatusCode, &'static str)> {
-    match crate::sql::entity::list(&pool).await {
-        Ok(entities) => Ok(Json(entities)),
+    let mut tx = pool.begin().await.map_err(|_e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to begin transaction",
+        )
+    })?;
+
+    match crate::sql::entity::list(&mut tx).await {
+        Ok(entities) => {
+            tx.commit().await.map_err(|_e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to commit transaction",
+                )
+            })?;
+            Ok(Json(entities))
+        }
         Err(_) => Err((StatusCode::INTERNAL_SERVER_ERROR, "failed to list entities")),
     }
 }
@@ -900,7 +943,9 @@ mod tests {
         assert_eq!(response.entity, entity);
         assert!(response.created);
 
-        let stored = crate::sql::entity::get(&pool, &entity).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let stored = crate::sql::entity::get(&mut tx, &entity).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(stored.is_some());
     }
 
@@ -916,9 +961,11 @@ mod tests {
         let response = result.unwrap().0;
         assert!(response.created);
 
-        let stored = crate::sql::entity::get(&pool, &response.entity)
+        let mut tx = pool.begin().await.unwrap();
+        let stored = crate::sql::entity::get(&mut tx, &response.entity)
             .await
             .unwrap();
+        tx.commit().await.unwrap();
         assert!(stored.is_some());
     }
 
@@ -949,7 +996,9 @@ mod tests {
         let pool = crate::sql::tests::setup_test_db().await;
         let entity = unique_entity("delete_entity_valid_id");
 
-        crate::sql::entity::create(&pool, &entity).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        crate::sql::entity::create(&mut tx, &entity).await.unwrap();
+        tx.commit().await.unwrap();
 
         let base64_part = entity.base64_part();
         let result = delete_entity(State(pool.clone()), Path(base64_part)).await;
@@ -957,7 +1006,9 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), StatusCode::NO_CONTENT);
 
-        let stored = crate::sql::entity::get(&pool, &entity).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let stored = crate::sql::entity::get(&mut tx, &entity).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(stored.is_none());
     }
 
@@ -1012,7 +1063,9 @@ mod tests {
         let pool = crate::sql::tests::setup_test_db().await;
         let entity = unique_entity("list_entities_includes_created");
 
-        crate::sql::entity::create(&pool, &entity).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        crate::sql::entity::create(&mut tx, &entity).await.unwrap();
+        tx.commit().await.unwrap();
 
         let result = list_entities(State(pool.clone())).await;
         assert!(result.is_ok());

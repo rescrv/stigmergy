@@ -508,14 +508,29 @@ async fn create_invariant(
             )
         })?;
 
-    match crate::sql::invariants::create(&pool, &invariant_id, &request.asserts).await {
-        Ok(()) => Ok((
-            StatusCode::CREATED,
-            Json(CreateInvariantResponse {
-                invariant_id,
-                asserts: request.asserts,
-            }),
-        )),
+    let mut tx = pool.begin().await.map_err(|_e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to begin transaction",
+        )
+    })?;
+
+    match crate::sql::invariants::create(&mut tx, &invariant_id, &request.asserts).await {
+        Ok(()) => {
+            tx.commit().await.map_err(|_e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to commit transaction",
+                )
+            })?;
+            Ok((
+                StatusCode::CREATED,
+                Json(CreateInvariantResponse {
+                    invariant_id,
+                    asserts: request.asserts,
+                }),
+            ))
+        }
         Err(crate::DataStoreError::AlreadyExists) => {
             Err((StatusCode::CONFLICT, "invariant already exists"))
         }
@@ -536,13 +551,28 @@ async fn get_invariant(
     let invariant_id = InvariantID::from_str(&invariant_string)
         .map_err(|_| (StatusCode::BAD_REQUEST, "invalid invariant id"))?;
 
-    match crate::sql::invariants::get(&pool, &invariant_id).await {
-        Ok(Some(record)) => Ok(Json(GetInvariantResponse {
-            invariant_id: record.invariant_id,
-            asserts: record.asserts,
-            created_at: record.created_at,
-            updated_at: record.updated_at,
-        })),
+    let mut tx = pool.begin().await.map_err(|_e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to begin transaction",
+        )
+    })?;
+
+    match crate::sql::invariants::get(&mut tx, &invariant_id).await {
+        Ok(Some(record)) => {
+            tx.commit().await.map_err(|_e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to commit transaction",
+                )
+            })?;
+            Ok(Json(GetInvariantResponse {
+                invariant_id: record.invariant_id,
+                asserts: record.asserts,
+                created_at: record.created_at,
+                updated_at: record.updated_at,
+            }))
+        }
         Ok(None) => Err((StatusCode::NOT_FOUND, "invariant not found")),
         Err(_) => Err((StatusCode::INTERNAL_SERVER_ERROR, "failed to get invariant")),
     }
@@ -559,14 +589,29 @@ async fn update_invariant(
     let invariant_id = InvariantID::from_str(&invariant_string)
         .map_err(|_| (StatusCode::BAD_REQUEST, "invalid invariant id"))?;
 
-    match crate::sql::invariants::update(&pool, &invariant_id, &request.asserts).await {
-        Ok(true) => match crate::sql::invariants::get(&pool, &invariant_id).await {
-            Ok(Some(record)) => Ok(Json(GetInvariantResponse {
-                invariant_id: record.invariant_id,
-                asserts: record.asserts,
-                created_at: record.created_at,
-                updated_at: record.updated_at,
-            })),
+    let mut tx = pool.begin().await.map_err(|_e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to begin transaction",
+        )
+    })?;
+
+    match crate::sql::invariants::update(&mut tx, &invariant_id, &request.asserts).await {
+        Ok(true) => match crate::sql::invariants::get(&mut tx, &invariant_id).await {
+            Ok(Some(record)) => {
+                tx.commit().await.map_err(|_e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "failed to commit transaction",
+                    )
+                })?;
+                Ok(Json(GetInvariantResponse {
+                    invariant_id: record.invariant_id,
+                    asserts: record.asserts,
+                    created_at: record.created_at,
+                    updated_at: record.updated_at,
+                }))
+            }
             Ok(None) => Err((StatusCode::NOT_FOUND, "invariant not found")),
             Err(_) => Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -591,8 +636,23 @@ async fn delete_invariant(
     let invariant_id = InvariantID::from_str(&invariant_string)
         .map_err(|_| (StatusCode::BAD_REQUEST, "invalid invariant id"))?;
 
-    match crate::sql::invariants::delete(&pool, &invariant_id).await {
-        Ok(true) => Ok(StatusCode::NO_CONTENT),
+    let mut tx = pool.begin().await.map_err(|_e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to begin transaction",
+        )
+    })?;
+
+    match crate::sql::invariants::delete(&mut tx, &invariant_id).await {
+        Ok(true) => {
+            tx.commit().await.map_err(|_e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to commit transaction",
+                )
+            })?;
+            Ok(StatusCode::NO_CONTENT)
+        }
         Ok(false) => Err((StatusCode::NOT_FOUND, "invariant not found")),
         Err(_) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -605,8 +665,21 @@ async fn delete_invariant(
 async fn list_invariants(
     State(pool): State<sqlx::PgPool>,
 ) -> Result<Json<Vec<GetInvariantResponse>>, (StatusCode, &'static str)> {
-    match crate::sql::invariants::list(&pool).await {
+    let mut tx = pool.begin().await.map_err(|_e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to begin transaction",
+        )
+    })?;
+
+    match crate::sql::invariants::list(&mut tx).await {
         Ok(records) => {
+            tx.commit().await.map_err(|_e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to commit transaction",
+                )
+            })?;
             let responses = records
                 .into_iter()
                 .map(|record| GetInvariantResponse {

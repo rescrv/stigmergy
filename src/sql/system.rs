@@ -4,7 +4,7 @@
 //! with automatic timestamp tracking for created_at and updated_at fields.
 
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
+use sqlx::{Postgres, Transaction};
 
 use crate::{DataStoreError, System, SystemName};
 
@@ -27,7 +27,7 @@ pub struct SystemRecord {
 /// The `created_at` and `updated_at` timestamps are automatically set to the current time.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 /// * `system` - The system to create
 ///
 /// # Returns
@@ -50,11 +50,13 @@ pub struct SystemRecord {
 ///     content: "You are a test system.".to_string(),
 /// };
 /// let system = System::new(config);
-/// sql::system::create(&pool, &system).await?;
+/// let mut tx = pool.begin().await?;
+/// sql::system::create(&mut tx, &system).await?;
+/// tx.commit().await?;
 /// # Ok(())
 /// # }
 /// ```
-pub async fn create(pool: &PgPool, system: &System) -> SqlResult<()> {
+pub async fn create(tx: &mut Transaction<'_, Postgres>, system: &System) -> SqlResult<()> {
     let system_name = system.name().as_str();
     let description = &system.config.description;
     let model = &system.config.model;
@@ -76,7 +78,7 @@ pub async fn create(pool: &PgPool, system: &System) -> SqlResult<()> {
         tools as &[String],
         &bids as &[String]
     )
-    .execute(pool)
+    .execute(&mut **tx)
     .await;
 
     match result {
@@ -94,14 +96,17 @@ pub async fn create(pool: &PgPool, system: &System) -> SqlResult<()> {
 /// Retrieves a system from the database.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 /// * `name` - The system name identifier
 ///
 /// # Returns
 /// * `Ok(Some(System))` - System found
 /// * `Ok(None)` - System not found
 /// * `Err(DataStoreError::Internal)` - Database error
-pub async fn get(pool: &PgPool, name: &SystemName) -> SqlResult<Option<System>> {
+pub async fn get(
+    tx: &mut Transaction<'_, Postgres>,
+    name: &SystemName,
+) -> SqlResult<Option<System>> {
     let system_name = name.as_str();
 
     let result = sqlx::query!(
@@ -112,7 +117,7 @@ pub async fn get(pool: &PgPool, name: &SystemName) -> SqlResult<Option<System>> 
         "#,
         system_name
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut **tx)
     .await;
 
     match result {
@@ -155,14 +160,14 @@ pub async fn get(pool: &PgPool, name: &SystemName) -> SqlResult<Option<System>> 
 /// Updates an existing system in the database.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 /// * `system` - The system with updated data
 ///
 /// # Returns
 /// * `Ok(true)` - System existed and was updated
 /// * `Ok(false)` - System did not exist
 /// * `Err(DataStoreError::Internal)` - Database error
-pub async fn update(pool: &PgPool, system: &System) -> SqlResult<bool> {
+pub async fn update(tx: &mut Transaction<'_, Postgres>, system: &System) -> SqlResult<bool> {
     let system_name = system.name().as_str();
     let description = &system.config.description;
     let model = &system.config.model;
@@ -185,7 +190,7 @@ pub async fn update(pool: &PgPool, system: &System) -> SqlResult<bool> {
         tools as &[String],
         &bids as &[String]
     )
-    .execute(pool)
+    .execute(&mut **tx)
     .await;
 
     match result {
@@ -200,14 +205,14 @@ pub async fn update(pool: &PgPool, system: &System) -> SqlResult<bool> {
 /// Deletes a system from the database.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 /// * `name` - The system name identifier
 ///
 /// # Returns
 /// * `Ok(true)` - System existed and was deleted
 /// * `Ok(false)` - System did not exist
 /// * `Err(DataStoreError::Internal)` - Database error
-pub async fn delete(pool: &PgPool, name: &SystemName) -> SqlResult<bool> {
+pub async fn delete(tx: &mut Transaction<'_, Postgres>, name: &SystemName) -> SqlResult<bool> {
     let system_name = name.as_str();
 
     let result = sqlx::query!(
@@ -217,7 +222,7 @@ pub async fn delete(pool: &PgPool, name: &SystemName) -> SqlResult<bool> {
         "#,
         system_name
     )
-    .execute(pool)
+    .execute(&mut **tx)
     .await;
 
     match result {
@@ -232,18 +237,18 @@ pub async fn delete(pool: &PgPool, name: &SystemName) -> SqlResult<bool> {
 /// Deletes all systems from the database.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 ///
 /// # Returns
 /// * `Ok(count)` - Number of systems deleted
 /// * `Err(DataStoreError::Internal)` - Database error
-pub async fn delete_all(pool: &PgPool) -> SqlResult<u32> {
+pub async fn delete_all(tx: &mut Transaction<'_, Postgres>) -> SqlResult<u32> {
     let result = sqlx::query!(
         r#"
         DELETE FROM systems
         "#
     )
-    .execute(pool)
+    .execute(&mut **tx)
     .await;
 
     match result {
@@ -258,12 +263,12 @@ pub async fn delete_all(pool: &PgPool) -> SqlResult<u32> {
 /// Lists all systems in the database.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 ///
 /// # Returns
 /// * `Ok(Vec<System>)` - List of all systems
 /// * `Err(DataStoreError::Internal)` - Database error
-pub async fn list(pool: &PgPool) -> SqlResult<Vec<System>> {
+pub async fn list(tx: &mut Transaction<'_, Postgres>) -> SqlResult<Vec<System>> {
     let result = sqlx::query!(
         r#"
         SELECT system_name, description, model, color, content, tools, bids, created_at, updated_at
@@ -271,7 +276,7 @@ pub async fn list(pool: &PgPool) -> SqlResult<Vec<System>> {
         ORDER BY created_at ASC
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut **tx)
     .await;
 
     match result {
@@ -345,14 +350,18 @@ mod tests {
             .await
             .unwrap();
 
-        create(&pool, &system).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        create(&mut tx, &system).await.unwrap();
+        tx.commit().await.unwrap();
 
         let db_after = sqlx::query_scalar::<_, DateTime<Utc>>("SELECT CURRENT_TIMESTAMP")
             .fetch_one(&pool)
             .await
             .unwrap();
 
-        let retrieved = get(&pool, &system_name).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let retrieved = get(&mut tx, &system_name).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(retrieved.is_some());
         let retrieved = retrieved.unwrap();
         assert_eq!(retrieved.config.name, system.config.name);
@@ -370,9 +379,12 @@ mod tests {
         let pool = super::super::tests::setup_test_db().await;
         let system = unique_system("create_duplicate_fails", std::process::id() as u64);
 
-        create(&pool, &system).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        create(&mut tx, &system).await.unwrap();
+        tx.commit().await.unwrap();
 
-        let result = create(&pool, &system).await;
+        let mut tx = pool.begin().await.unwrap();
+        let result = create(&mut tx, &system).await;
         assert!(matches!(result, Err(DataStoreError::AlreadyExists)));
     }
 
@@ -382,18 +394,26 @@ mod tests {
         let mut system = unique_system("update_existing", std::process::id() as u64);
         let system_name = system.name().clone();
 
-        create(&pool, &system).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        create(&mut tx, &system).await.unwrap();
+        tx.commit().await.unwrap();
 
-        let record_before = get(&pool, &system_name).await.unwrap().unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let record_before = get(&mut tx, &system_name).await.unwrap().unwrap();
+        tx.commit().await.unwrap();
         assert_eq!(record_before.created_at, record_before.updated_at);
 
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
         system.config.description = "Updated description".to_string();
-        let updated = update(&pool, &system).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let updated = update(&mut tx, &system).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(updated);
 
-        let record_after = get(&pool, &system_name).await.unwrap().unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let record_after = get(&mut tx, &system_name).await.unwrap().unwrap();
+        tx.commit().await.unwrap();
         assert_eq!(record_after.config.description, "Updated description");
         assert_eq!(record_after.created_at, record_before.created_at);
         assert!(record_after.updated_at > record_before.updated_at);
@@ -404,7 +424,9 @@ mod tests {
         let pool = super::super::tests::setup_test_db().await;
         let system = unique_system("update_nonexistent", std::process::id() as u64);
 
-        let updated = update(&pool, &system).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let updated = update(&mut tx, &system).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(!updated);
     }
 
@@ -414,12 +436,18 @@ mod tests {
         let system = unique_system("delete_existing", std::process::id() as u64);
         let system_name = system.name().clone();
 
-        create(&pool, &system).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        create(&mut tx, &system).await.unwrap();
+        tx.commit().await.unwrap();
 
-        let deleted = delete(&pool, &system_name).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let deleted = delete(&mut tx, &system_name).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(deleted);
 
-        let record = get(&pool, &system_name).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let record = get(&mut tx, &system_name).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(record.is_none());
     }
 
@@ -429,7 +457,9 @@ mod tests {
         let system = unique_system("delete_nonexistent", std::process::id() as u64);
         let system_name = system.name().clone();
 
-        let deleted = delete(&pool, &system_name).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let deleted = delete(&mut tx, &system_name).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(!deleted);
     }
 
@@ -441,14 +471,20 @@ mod tests {
         let system2 = unique_system("delete_all", base_id + 1);
         let system3 = unique_system("delete_all", base_id + 2);
 
-        create(&pool, &system1).await.unwrap();
-        create(&pool, &system2).await.unwrap();
-        create(&pool, &system3).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        create(&mut tx, &system1).await.unwrap();
+        create(&mut tx, &system2).await.unwrap();
+        create(&mut tx, &system3).await.unwrap();
+        tx.commit().await.unwrap();
 
-        let count = delete_all(&pool).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let count = delete_all(&mut tx).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(count >= 3);
 
-        let systems = list(&pool).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let systems = list(&mut tx).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(systems.is_empty());
     }
 
@@ -460,11 +496,15 @@ mod tests {
         let system2 = unique_system("list_multiple", base_id + 1);
         let system3 = unique_system("list_multiple", base_id + 2);
 
-        create(&pool, &system1).await.unwrap();
-        create(&pool, &system2).await.unwrap();
-        create(&pool, &system3).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        create(&mut tx, &system1).await.unwrap();
+        create(&mut tx, &system2).await.unwrap();
+        create(&mut tx, &system3).await.unwrap();
+        tx.commit().await.unwrap();
 
-        let systems = list(&pool).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let systems = list(&mut tx).await.unwrap();
+        tx.commit().await.unwrap();
         let system_names: Vec<_> = systems.iter().map(|s| s.name()).collect();
         assert!(system_names.contains(&system1.name()));
         assert!(system_names.contains(&system2.name()));

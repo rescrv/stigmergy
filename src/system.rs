@@ -277,8 +277,21 @@ async fn create_system(
 
     let system = System::new(config);
 
-    match crate::sql::system::create(&pool, &system).await {
+    let mut tx = pool.begin().await.map_err(|_e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to begin transaction",
+        )
+    })?;
+
+    match crate::sql::system::create(&mut tx, &system).await {
         Ok(()) => {
+            tx.commit().await.map_err(|_e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to commit transaction",
+                )
+            })?;
             let response = CreateSystemResponse {
                 system,
                 created: true,
@@ -317,8 +330,21 @@ async fn create_system_from_markdown(
 async fn list_systems(
     State(pool): State<sqlx::PgPool>,
 ) -> Result<Json<Vec<SystemListItem>>, (StatusCode, &'static str)> {
-    match crate::sql::system::list(&pool).await {
+    let mut tx = pool.begin().await.map_err(|_e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to begin transaction",
+        )
+    })?;
+
+    match crate::sql::system::list(&mut tx).await {
         Ok(systems) => {
+            tx.commit().await.map_err(|_e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to commit transaction",
+                )
+            })?;
             let system_list: Vec<SystemListItem> =
                 systems.into_iter().map(|system| system.into()).collect();
             Ok(Json(system_list))
@@ -339,8 +365,23 @@ async fn get_system(
         }
     };
 
-    match crate::sql::system::get(&pool, &system_name).await {
-        Ok(Some(system)) => Ok(Json(system)),
+    let mut tx = pool.begin().await.map_err(|_e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to begin transaction",
+        )
+    })?;
+
+    match crate::sql::system::get(&mut tx, &system_name).await {
+        Ok(Some(system)) => {
+            tx.commit().await.map_err(|_e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to commit transaction",
+                )
+            })?;
+            Ok(Json(system))
+        }
         Ok(None) => Err((StatusCode::NOT_FOUND, "system not found")),
         Err(_) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -369,7 +410,14 @@ async fn update_system(
         }
     };
 
-    let old_system = match crate::sql::system::get(&pool, &system_name).await {
+    let mut tx = pool.begin().await.map_err(|_e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to begin transaction".to_string(),
+        )
+    })?;
+
+    let old_system = match crate::sql::system::get(&mut tx, &system_name).await {
         Ok(Some(system)) => system,
         Ok(None) => {
             return Err((StatusCode::NOT_FOUND, "system not found".to_string()));
@@ -385,8 +433,16 @@ async fn update_system(
     let mut updated_system = old_system;
     updated_system.update_config(config);
 
-    match crate::sql::system::update(&pool, &updated_system).await {
-        Ok(true) => Ok(Json(updated_system)),
+    match crate::sql::system::update(&mut tx, &updated_system).await {
+        Ok(true) => {
+            tx.commit().await.map_err(|_e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to commit transaction".to_string(),
+                )
+            })?;
+            Ok(Json(updated_system))
+        }
         Ok(false) => Err((StatusCode::NOT_FOUND, "system not found".to_string())),
         Err(_) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -408,7 +464,14 @@ async fn patch_system(
         }
     };
 
-    let mut system = match crate::sql::system::get(&pool, &system_name).await {
+    let mut tx = pool.begin().await.map_err(|_e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to begin transaction".to_string(),
+        )
+    })?;
+
+    let mut system = match crate::sql::system::get(&mut tx, &system_name).await {
         Ok(Some(system)) => system,
         Ok(None) => {
             return Err((StatusCode::NOT_FOUND, "system not found".to_string()));
@@ -458,8 +521,16 @@ async fn patch_system(
 
     system.update_config(config);
 
-    match crate::sql::system::update(&pool, &system).await {
-        Ok(true) => Ok(Json(system)),
+    match crate::sql::system::update(&mut tx, &system).await {
+        Ok(true) => {
+            tx.commit().await.map_err(|_e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to commit transaction".to_string(),
+                )
+            })?;
+            Ok(Json(system))
+        }
         Ok(false) => Err((StatusCode::NOT_FOUND, "system not found".to_string())),
         Err(_) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -480,8 +551,23 @@ async fn delete_system(
         }
     };
 
-    match crate::sql::system::delete(&pool, &system_name).await {
-        Ok(true) => Ok(StatusCode::NO_CONTENT),
+    let mut tx = pool.begin().await.map_err(|_e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to begin transaction",
+        )
+    })?;
+
+    match crate::sql::system::delete(&mut tx, &system_name).await {
+        Ok(true) => {
+            tx.commit().await.map_err(|_e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to commit transaction",
+                )
+            })?;
+            Ok(StatusCode::NO_CONTENT)
+        }
         Ok(false) => Err((StatusCode::NOT_FOUND, "system not found")),
         Err(_) => Err((StatusCode::INTERNAL_SERVER_ERROR, "failed to delete system")),
     }
@@ -491,8 +577,23 @@ async fn delete_system(
 async fn delete_all_systems(
     State(pool): State<sqlx::PgPool>,
 ) -> Result<StatusCode, (StatusCode, &'static str)> {
-    match crate::sql::system::delete_all(&pool).await {
-        Ok(_) => Ok(StatusCode::NO_CONTENT),
+    let mut tx = pool.begin().await.map_err(|_e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to begin transaction",
+        )
+    })?;
+
+    match crate::sql::system::delete_all(&mut tx).await {
+        Ok(_) => {
+            tx.commit().await.map_err(|_e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to commit transaction",
+                )
+            })?;
+            Ok(StatusCode::NO_CONTENT)
+        }
         Err(_) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             "failed to delete all systems",

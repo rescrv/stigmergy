@@ -5,7 +5,7 @@
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use sqlx::PgPool;
+use sqlx::{Postgres, Transaction};
 
 use crate::{Component, DataStoreError, Entity};
 
@@ -32,7 +32,7 @@ pub struct ComponentRecord {
 /// The `created_at` and `updated_at` timestamps are automatically set to the current time.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 /// * `entity` - The entity to attach the component to
 /// * `component` - The component type
 /// * `data` - The component data (must be valid against the component definition schema)
@@ -51,12 +51,14 @@ pub struct ComponentRecord {
 /// let entity = Entity::new([1u8; 32]);
 /// let component = Component::new("Position").unwrap();
 /// let data = json!({"x": 1.0, "y": 2.0, "z": 3.0});
-/// sql::component::create(&pool, &entity, &component, &data).await?;
+/// let mut tx = pool.begin().await?;
+/// sql::component::create(&mut tx, &entity, &component, &data).await?;
+/// tx.commit().await?;
 /// # Ok(())
 /// # }
 /// ```
 pub async fn create(
-    pool: &PgPool,
+    tx: &mut Transaction<'_, Postgres>,
     entity: &Entity,
     component: &Component,
     data: &Value,
@@ -73,7 +75,7 @@ pub async fn create(
         component_name,
         data
     )
-    .execute(pool)
+    .execute(&mut **tx)
     .await;
 
     match result {
@@ -94,7 +96,7 @@ pub async fn create(
 /// Retrieves a component instance from the database.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 /// * `entity` - The entity to retrieve the component from
 /// * `component` - The component type
 ///
@@ -103,7 +105,7 @@ pub async fn create(
 /// * `Ok(None)` - Component instance not found
 /// * `Err(DataStoreError::Internal)` - Database error
 pub async fn get(
-    pool: &PgPool,
+    tx: &mut Transaction<'_, Postgres>,
     entity: &Entity,
     component: &Component,
 ) -> SqlResult<Option<Value>> {
@@ -119,7 +121,7 @@ pub async fn get(
         entity_bytes.as_slice(),
         component_name
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut **tx)
     .await;
 
     match result {
@@ -135,7 +137,7 @@ pub async fn get(
 /// Updates an existing component instance in the database.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 /// * `entity` - The entity the component is attached to
 /// * `component` - The component type
 /// * `data` - The new component data
@@ -145,7 +147,7 @@ pub async fn get(
 /// * `Ok(false)` - Component instance did not exist
 /// * `Err(DataStoreError::Internal)` - Database error
 pub async fn update(
-    pool: &PgPool,
+    tx: &mut Transaction<'_, Postgres>,
     entity: &Entity,
     component: &Component,
     data: &Value,
@@ -163,7 +165,7 @@ pub async fn update(
         component_name,
         data
     )
-    .execute(pool)
+    .execute(&mut **tx)
     .await;
 
     match result {
@@ -178,7 +180,7 @@ pub async fn update(
 /// Deletes a component instance from the database.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 /// * `entity` - The entity the component is attached to
 /// * `component` - The component type
 ///
@@ -186,7 +188,11 @@ pub async fn update(
 /// * `Ok(true)` - Component instance existed and was deleted
 /// * `Ok(false)` - Component instance did not exist
 /// * `Err(DataStoreError::Internal)` - Database error
-pub async fn delete(pool: &PgPool, entity: &Entity, component: &Component) -> SqlResult<bool> {
+pub async fn delete(
+    tx: &mut Transaction<'_, Postgres>,
+    entity: &Entity,
+    component: &Component,
+) -> SqlResult<bool> {
     let entity_bytes = entity.as_bytes();
     let component_name = component.as_str();
 
@@ -198,7 +204,7 @@ pub async fn delete(pool: &PgPool, entity: &Entity, component: &Component) -> Sq
         entity_bytes.as_slice(),
         component_name
     )
-    .execute(pool)
+    .execute(&mut **tx)
     .await;
 
     match result {
@@ -213,13 +219,16 @@ pub async fn delete(pool: &PgPool, entity: &Entity, component: &Component) -> Sq
 /// Lists all component instances for a specific entity.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 /// * `entity` - The entity to list components for
 ///
 /// # Returns
 /// * `Ok(Vec<(Component, Value)>)` - List of components and their data
 /// * `Err(DataStoreError::Internal)` - Database error
-pub async fn list_for_entity(pool: &PgPool, entity: &Entity) -> SqlResult<Vec<(Component, Value)>> {
+pub async fn list_for_entity(
+    tx: &mut Transaction<'_, Postgres>,
+    entity: &Entity,
+) -> SqlResult<Vec<(Component, Value)>> {
     let entity_bytes = entity.as_bytes();
 
     let result = sqlx::query!(
@@ -231,7 +240,7 @@ pub async fn list_for_entity(pool: &PgPool, entity: &Entity) -> SqlResult<Vec<(C
         "#,
         entity_bytes.as_slice()
     )
-    .fetch_all(pool)
+    .fetch_all(&mut **tx)
     .await;
 
     match result {
@@ -260,12 +269,14 @@ pub async fn list_for_entity(pool: &PgPool, entity: &Entity) -> SqlResult<Vec<(C
 /// Lists all component instances in the database.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 ///
 /// # Returns
 /// * `Ok(Vec<((Entity, Component), Value)>)` - List of all component instances
 /// * `Err(DataStoreError::Internal)` - Database error
-pub async fn list_all(pool: &PgPool) -> SqlResult<Vec<((Entity, Component), Value)>> {
+pub async fn list_all(
+    tx: &mut Transaction<'_, Postgres>,
+) -> SqlResult<Vec<((Entity, Component), Value)>> {
     let result = sqlx::query!(
         r#"
         SELECT entity_id, component_name, data
@@ -273,7 +284,7 @@ pub async fn list_all(pool: &PgPool) -> SqlResult<Vec<((Entity, Component), Valu
         ORDER BY entity_id ASC, component_name ASC
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut **tx)
     .await;
 
     match result {
@@ -308,13 +319,16 @@ pub async fn list_all(pool: &PgPool) -> SqlResult<Vec<((Entity, Component), Valu
 /// Deletes all component instances for a specific entity.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 /// * `entity` - The entity to delete all components from
 ///
 /// # Returns
 /// * `Ok(count)` - Number of component instances deleted
 /// * `Err(DataStoreError::Internal)` - Database error
-pub async fn delete_all_for_entity(pool: &PgPool, entity: &Entity) -> SqlResult<u32> {
+pub async fn delete_all_for_entity(
+    tx: &mut Transaction<'_, Postgres>,
+    entity: &Entity,
+) -> SqlResult<u32> {
     let entity_bytes = entity.as_bytes();
 
     let result = sqlx::query!(
@@ -324,7 +338,7 @@ pub async fn delete_all_for_entity(pool: &PgPool, entity: &Entity) -> SqlResult<
         "#,
         entity_bytes.as_slice()
     )
-    .execute(pool)
+    .execute(&mut **tx)
     .await;
 
     match result {
@@ -368,19 +382,23 @@ mod tests {
         let component = Component::new("Position").unwrap();
         let data = json!({"x": 1.0, "y": 2.0, "z": 3.0});
 
-        crate::sql::entity::create(&pool, &entity).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        crate::sql::entity::create(&mut tx, &entity).await.unwrap();
 
         let def = crate::ComponentDefinition::new(
             component.clone(),
             json!({"type": "object", "properties": {"x": {"type": "number"}}}),
         );
-        crate::sql::component_definition::create(&pool, &def)
+        crate::sql::component_definition::create(&mut tx, &def)
             .await
             .unwrap();
 
-        create(&pool, &entity, &component, &data).await.unwrap();
+        create(&mut tx, &entity, &component, &data).await.unwrap();
+        tx.commit().await.unwrap();
 
-        let retrieved = get(&pool, &entity, &component).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let retrieved = get(&mut tx, &entity, &component).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap(), data);
     }
@@ -393,19 +411,22 @@ mod tests {
         let component = Component::new("Health").unwrap();
         let data = json!({"hp": 100});
 
-        crate::sql::entity::create(&pool, &entity).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        crate::sql::entity::create(&mut tx, &entity).await.unwrap();
 
         let def = crate::ComponentDefinition::new(
             component.clone(),
             json!({"type": "object", "properties": {"hp": {"type": "number"}}}),
         );
-        crate::sql::component_definition::create(&pool, &def)
+        crate::sql::component_definition::create(&mut tx, &def)
             .await
             .unwrap();
 
-        create(&pool, &entity, &component, &data).await.unwrap();
+        create(&mut tx, &entity, &component, &data).await.unwrap();
+        tx.commit().await.unwrap();
 
-        let result = create(&pool, &entity, &component, &data).await;
+        let mut tx = pool.begin().await.unwrap();
+        let result = create(&mut tx, &entity, &component, &data).await;
         assert!(matches!(result, Err(DataStoreError::AlreadyExists)));
     }
 
@@ -418,22 +439,28 @@ mod tests {
         let data1 = json!({"points": 100});
         let data2 = json!({"points": 200});
 
-        crate::sql::entity::create(&pool, &entity).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        crate::sql::entity::create(&mut tx, &entity).await.unwrap();
 
         let def = crate::ComponentDefinition::new(
             component.clone(),
             json!({"type": "object", "properties": {"points": {"type": "number"}}}),
         );
-        crate::sql::component_definition::create(&pool, &def)
+        crate::sql::component_definition::create(&mut tx, &def)
             .await
             .unwrap();
 
-        create(&pool, &entity, &component, &data1).await.unwrap();
+        create(&mut tx, &entity, &component, &data1).await.unwrap();
+        tx.commit().await.unwrap();
 
-        let updated = update(&pool, &entity, &component, &data2).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let updated = update(&mut tx, &entity, &component, &data2).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(updated);
 
-        let retrieved = get(&pool, &entity, &component).await.unwrap().unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let retrieved = get(&mut tx, &entity, &component).await.unwrap().unwrap();
+        tx.commit().await.unwrap();
         assert_eq!(retrieved, data2);
     }
 
@@ -445,22 +472,28 @@ mod tests {
         let component = Component::new("Tag").unwrap();
         let data = json!({"label": "test"});
 
-        crate::sql::entity::create(&pool, &entity).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        crate::sql::entity::create(&mut tx, &entity).await.unwrap();
 
         let def = crate::ComponentDefinition::new(
             component.clone(),
             json!({"type": "object", "properties": {"label": {"type": "string"}}}),
         );
-        crate::sql::component_definition::create(&pool, &def)
+        crate::sql::component_definition::create(&mut tx, &def)
             .await
             .unwrap();
 
-        create(&pool, &entity, &component, &data).await.unwrap();
+        create(&mut tx, &entity, &component, &data).await.unwrap();
+        tx.commit().await.unwrap();
 
-        let deleted = delete(&pool, &entity, &component).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let deleted = delete(&mut tx, &entity, &component).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(deleted);
 
-        let retrieved = get(&pool, &entity, &component).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let retrieved = get(&mut tx, &entity, &component).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(retrieved.is_none());
     }
 
@@ -476,23 +509,27 @@ mod tests {
         let data2 = json!({"value": 2});
         let data3 = json!({"value": 3});
 
-        crate::sql::entity::create(&pool, &entity).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        crate::sql::entity::create(&mut tx, &entity).await.unwrap();
 
         for comp in [&comp1, &comp2, &comp3] {
             let def = crate::ComponentDefinition::new(
                 comp.clone(),
                 json!({"type": "object", "properties": {"value": {"type": "number"}}}),
             );
-            crate::sql::component_definition::create(&pool, &def)
+            crate::sql::component_definition::create(&mut tx, &def)
                 .await
                 .unwrap();
         }
 
-        create(&pool, &entity, &comp1, &data1).await.unwrap();
-        create(&pool, &entity, &comp2, &data2).await.unwrap();
-        create(&pool, &entity, &comp3, &data3).await.unwrap();
+        create(&mut tx, &entity, &comp1, &data1).await.unwrap();
+        create(&mut tx, &entity, &comp2, &data2).await.unwrap();
+        create(&mut tx, &entity, &comp3, &data3).await.unwrap();
+        tx.commit().await.unwrap();
 
-        let components = list_for_entity(&pool, &entity).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let components = list_for_entity(&mut tx, &entity).await.unwrap();
+        tx.commit().await.unwrap();
         assert_eq!(components.len(), 3);
 
         let component_names: Vec<_> = components.iter().map(|(c, _)| c).collect();
@@ -510,25 +547,31 @@ mod tests {
         let comp2 = Component::new("Two").unwrap();
         let data = json!({"x": 1});
 
-        crate::sql::entity::create(&pool, &entity).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        crate::sql::entity::create(&mut tx, &entity).await.unwrap();
 
         for comp in [&comp1, &comp2] {
             let def = crate::ComponentDefinition::new(
                 comp.clone(),
                 json!({"type": "object", "properties": {"x": {"type": "number"}}}),
             );
-            crate::sql::component_definition::create(&pool, &def)
+            crate::sql::component_definition::create(&mut tx, &def)
                 .await
                 .unwrap();
         }
 
-        create(&pool, &entity, &comp1, &data).await.unwrap();
-        create(&pool, &entity, &comp2, &data).await.unwrap();
+        create(&mut tx, &entity, &comp1, &data).await.unwrap();
+        create(&mut tx, &entity, &comp2, &data).await.unwrap();
+        tx.commit().await.unwrap();
 
-        let count = delete_all_for_entity(&pool, &entity).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let count = delete_all_for_entity(&mut tx, &entity).await.unwrap();
+        tx.commit().await.unwrap();
         assert_eq!(count, 2);
 
-        let components = list_for_entity(&pool, &entity).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let components = list_for_entity(&mut tx, &entity).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(components.is_empty());
     }
 }

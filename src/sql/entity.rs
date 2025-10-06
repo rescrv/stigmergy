@@ -4,7 +4,7 @@
 //! with automatic timestamp tracking for created_at and updated_at fields.
 
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
+use sqlx::{Postgres, Transaction};
 
 use crate::{DataStoreError, Entity};
 
@@ -27,7 +27,7 @@ pub struct EntityRecord {
 /// The `created_at` and `updated_at` timestamps are automatically set to the current time.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 /// * `entity` - The entity to create
 ///
 /// # Returns
@@ -40,12 +40,14 @@ pub struct EntityRecord {
 /// # use stigmergy::{Entity, sql};
 /// # use sqlx::PgPool;
 /// # async fn example(pool: PgPool) -> Result<(), Box<dyn std::error::Error>> {
+/// let mut tx = pool.begin().await?;
 /// let entity = Entity::new([1u8; 32]);
-/// sql::entity::create(&pool, &entity).await?;
+/// sql::entity::create(&mut tx, &entity).await?;
+/// tx.commit().await?;
 /// # Ok(())
 /// # }
 /// ```
-pub async fn create(pool: &PgPool, entity: &Entity) -> SqlResult<()> {
+pub async fn create(tx: &mut Transaction<'_, Postgres>, entity: &Entity) -> SqlResult<()> {
     let entity_bytes = entity.as_bytes();
 
     let result = sqlx::query!(
@@ -55,7 +57,7 @@ pub async fn create(pool: &PgPool, entity: &Entity) -> SqlResult<()> {
         "#,
         entity_bytes.as_slice()
     )
-    .execute(pool)
+    .execute(&mut **tx)
     .await;
 
     match result {
@@ -73,14 +75,17 @@ pub async fn create(pool: &PgPool, entity: &Entity) -> SqlResult<()> {
 /// Retrieves an entity from the database.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 /// * `entity` - The entity to retrieve
 ///
 /// # Returns
 /// * `Ok(Some(EntityRecord))` - Entity found
 /// * `Ok(None)` - Entity not found
 /// * `Err(DataStoreError::Internal)` - Database error
-pub async fn get(pool: &PgPool, entity: &Entity) -> SqlResult<Option<EntityRecord>> {
+pub async fn get(
+    tx: &mut Transaction<'_, Postgres>,
+    entity: &Entity,
+) -> SqlResult<Option<EntityRecord>> {
     let entity_bytes = entity.as_bytes();
 
     let result = sqlx::query!(
@@ -91,7 +96,7 @@ pub async fn get(pool: &PgPool, entity: &Entity) -> SqlResult<Option<EntityRecor
         "#,
         entity_bytes.as_slice()
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut **tx)
     .await;
 
     match result {
@@ -120,14 +125,14 @@ pub async fn get(pool: &PgPool, entity: &Entity) -> SqlResult<Option<EntityRecor
 /// This will cascade delete all associated components, component instances, and messages.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 /// * `entity` - The entity to delete
 ///
 /// # Returns
 /// * `Ok(true)` - Entity existed and was deleted
 /// * `Ok(false)` - Entity did not exist
 /// * `Err(DataStoreError::Internal)` - Database error
-pub async fn delete(pool: &PgPool, entity: &Entity) -> SqlResult<bool> {
+pub async fn delete(tx: &mut Transaction<'_, Postgres>, entity: &Entity) -> SqlResult<bool> {
     let entity_bytes = entity.as_bytes();
 
     let result = sqlx::query!(
@@ -137,7 +142,7 @@ pub async fn delete(pool: &PgPool, entity: &Entity) -> SqlResult<bool> {
         "#,
         entity_bytes.as_slice()
     )
-    .execute(pool)
+    .execute(&mut **tx)
     .await;
 
     match result {
@@ -152,12 +157,12 @@ pub async fn delete(pool: &PgPool, entity: &Entity) -> SqlResult<bool> {
 /// Lists all entities in the database.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 ///
 /// # Returns
 /// * `Ok(Vec<Entity>)` - List of all entities
 /// * `Err(DataStoreError::Internal)` - Database error
-pub async fn list(pool: &PgPool) -> SqlResult<Vec<Entity>> {
+pub async fn list(tx: &mut Transaction<'_, Postgres>) -> SqlResult<Vec<Entity>> {
     let result = sqlx::query!(
         r#"
         SELECT entity_id
@@ -165,7 +170,7 @@ pub async fn list(pool: &PgPool) -> SqlResult<Vec<Entity>> {
         ORDER BY created_at ASC
         "#
     )
-    .fetch_all(pool)
+    .fetch_all(&mut **tx)
     .await;
 
     match result {
@@ -191,14 +196,14 @@ pub async fn list(pool: &PgPool) -> SqlResult<Vec<Entity>> {
 /// This is useful when you want to mark an entity as modified without changing its data.
 ///
 /// # Arguments
-/// * `pool` - PostgreSQL connection pool
+/// * `tx` - PostgreSQL transaction
 /// * `entity` - The entity to touch
 ///
 /// # Returns
 /// * `Ok(true)` - Entity existed and was updated
 /// * `Ok(false)` - Entity did not exist
 /// * `Err(DataStoreError::Internal)` - Database error
-pub async fn touch(pool: &PgPool, entity: &Entity) -> SqlResult<bool> {
+pub async fn touch(tx: &mut Transaction<'_, Postgres>, entity: &Entity) -> SqlResult<bool> {
     let entity_bytes = entity.as_bytes();
 
     let result = sqlx::query!(
@@ -209,7 +214,7 @@ pub async fn touch(pool: &PgPool, entity: &Entity) -> SqlResult<bool> {
         "#,
         entity_bytes.as_slice()
     )
-    .execute(pool)
+    .execute(&mut **tx)
     .await;
 
     match result {
@@ -254,14 +259,18 @@ mod tests {
             .await
             .unwrap();
 
-        create(&pool, &entity).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        create(&mut tx, &entity).await.unwrap();
+        tx.commit().await.unwrap();
 
         let db_after = sqlx::query_scalar::<_, DateTime<Utc>>("SELECT CURRENT_TIMESTAMP")
             .fetch_one(&pool)
             .await
             .unwrap();
 
-        let record = get(&pool, &entity).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let record = get(&mut tx, &entity).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(record.is_some());
         let record = record.unwrap();
         assert_eq!(record.entity, entity);
@@ -277,9 +286,12 @@ mod tests {
         let pool = super::super::tests::setup_test_db().await;
         let entity = unique_entity("create_duplicate_fails");
 
-        create(&pool, &entity).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        create(&mut tx, &entity).await.unwrap();
+        tx.commit().await.unwrap();
 
-        let result = create(&pool, &entity).await;
+        let mut tx = pool.begin().await.unwrap();
+        let result = create(&mut tx, &entity).await;
         assert!(matches!(result, Err(DataStoreError::AlreadyExists)));
     }
 
@@ -288,12 +300,18 @@ mod tests {
         let pool = super::super::tests::setup_test_db().await;
         let entity = unique_entity("delete_existing");
 
-        create(&pool, &entity).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        create(&mut tx, &entity).await.unwrap();
+        tx.commit().await.unwrap();
 
-        let deleted = delete(&pool, &entity).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let deleted = delete(&mut tx, &entity).await.unwrap();
         assert!(deleted);
+        tx.commit().await.unwrap();
 
-        let record = get(&pool, &entity).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let record = get(&mut tx, &entity).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(record.is_none());
     }
 
@@ -302,7 +320,9 @@ mod tests {
         let pool = super::super::tests::setup_test_db().await;
         let entity = unique_entity("delete_nonexistent");
 
-        let deleted = delete(&pool, &entity).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let deleted = delete(&mut tx, &entity).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(!deleted);
     }
 
@@ -313,11 +333,15 @@ mod tests {
         let entity2 = unique_entity("list_multiple_2");
         let entity3 = unique_entity("list_multiple_3");
 
-        create(&pool, &entity1).await.unwrap();
-        create(&pool, &entity2).await.unwrap();
-        create(&pool, &entity3).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        create(&mut tx, &entity1).await.unwrap();
+        create(&mut tx, &entity2).await.unwrap();
+        create(&mut tx, &entity3).await.unwrap();
+        tx.commit().await.unwrap();
 
-        let entities = list(&pool).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let entities = list(&mut tx).await.unwrap();
+        tx.commit().await.unwrap();
         assert!(entities.contains(&entity1));
         assert!(entities.contains(&entity2));
         assert!(entities.contains(&entity3));
@@ -328,17 +352,25 @@ mod tests {
         let pool = super::super::tests::setup_test_db().await;
         let entity = unique_entity("touch_updates_timestamp");
 
-        create(&pool, &entity).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        create(&mut tx, &entity).await.unwrap();
+        tx.commit().await.unwrap();
 
-        let record_before = get(&pool, &entity).await.unwrap().unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let record_before = get(&mut tx, &entity).await.unwrap().unwrap();
+        tx.commit().await.unwrap();
         assert_eq!(record_before.created_at, record_before.updated_at);
 
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-        let touched = touch(&pool, &entity).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let touched = touch(&mut tx, &entity).await.unwrap();
         assert!(touched);
+        tx.commit().await.unwrap();
 
-        let record_after = get(&pool, &entity).await.unwrap().unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let record_after = get(&mut tx, &entity).await.unwrap().unwrap();
+        tx.commit().await.unwrap();
         assert_eq!(record_after.created_at, record_before.created_at);
         assert!(record_after.updated_at > record_before.updated_at);
     }

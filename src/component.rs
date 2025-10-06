@@ -265,8 +265,21 @@ async fn get_components_for_entity(
         .parse()
         .map_err(|_| (StatusCode::BAD_REQUEST, "invalid entity ID"))?;
 
-    match crate::sql::component::list_for_entity(&pool, &entity).await {
+    let mut tx = pool.begin().await.map_err(|_e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to begin transaction",
+        )
+    })?;
+
+    match crate::sql::component::list_for_entity(&mut tx, &entity).await {
         Ok(components) => {
+            tx.commit().await.map_err(|_e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to commit transaction",
+                )
+            })?;
             let items: Vec<ComponentListItem> = components
                 .into_iter()
                 .map(|(component, data)| ComponentListItem { component, data })
@@ -284,8 +297,21 @@ async fn get_components_for_entity(
 async fn get_all_components(
     State(pool): State<sqlx::PgPool>,
 ) -> Result<Json<Vec<(String, ComponentListItem)>>, (StatusCode, &'static str)> {
-    match crate::sql::component::list_all(&pool).await {
+    let mut tx = pool.begin().await.map_err(|_e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to begin transaction",
+        )
+    })?;
+
+    match crate::sql::component::list_all(&mut tx).await {
         Ok(components) => {
+            tx.commit().await.map_err(|_e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to commit transaction",
+                )
+            })?;
             let items: Vec<(String, ComponentListItem)> = components
                 .into_iter()
                 .map(|((entity, component), data)| {
@@ -311,8 +337,16 @@ async fn create_component_for_entity(
         .parse()
         .map_err(|_| (StatusCode::BAD_REQUEST, "invalid entity ID".to_string()))?;
 
+    let mut tx = pool.begin().await.map_err(|_e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to begin transaction".to_string(),
+        )
+    })?;
+
     // Validate the component data against the schema
-    let definition = match crate::sql::component_definition::get(&pool, &request.component).await {
+    let definition = match crate::sql::component_definition::get(&mut tx, &request.component).await
+    {
         Ok(Some(def_record)) => def_record.definition,
         Ok(None) => {
             return Err((
@@ -338,8 +372,14 @@ async fn create_component_for_entity(
         ));
     }
 
-    match crate::sql::component::create(&pool, &entity, &request.component, &request.data).await {
+    match crate::sql::component::create(&mut tx, &entity, &request.component, &request.data).await {
         Ok(()) => {
+            tx.commit().await.map_err(|_e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to commit transaction".to_string(),
+                )
+            })?;
             let response = CreateComponentResponse {
                 entity,
                 component: request.component,
@@ -373,8 +413,23 @@ async fn get_component_by_id_for_entity(
     let component =
         Component::new(component_str).ok_or((StatusCode::BAD_REQUEST, "invalid component name"))?;
 
-    match crate::sql::component::get(&pool, &entity, &component).await {
-        Ok(Some(data)) => Ok(Json(data)),
+    let mut tx = pool.begin().await.map_err(|_e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to begin transaction",
+        )
+    })?;
+
+    match crate::sql::component::get(&mut tx, &entity, &component).await {
+        Ok(Some(data)) => {
+            tx.commit().await.map_err(|_e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to commit transaction",
+                )
+            })?;
+            Ok(Json(data))
+        }
         Ok(None) => Err((StatusCode::NOT_FOUND, "component instance not found")),
         Err(_) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -398,8 +453,15 @@ async fn update_component_by_id_for_entity(
         "invalid component name".to_string(),
     ))?;
 
+    let mut tx = pool.begin().await.map_err(|_e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to begin transaction".to_string(),
+        )
+    })?;
+
     // Validate the component data against the schema
-    let definition = match crate::sql::component_definition::get(&pool, &component).await {
+    let definition = match crate::sql::component_definition::get(&mut tx, &component).await {
         Ok(Some(def_record)) => def_record.definition,
         Ok(None) => {
             return Err((
@@ -422,8 +484,16 @@ async fn update_component_by_id_for_entity(
         ));
     }
 
-    match crate::sql::component::update(&pool, &entity, &component, &data).await {
-        Ok(true) => Ok(Json(data)),
+    match crate::sql::component::update(&mut tx, &entity, &component, &data).await {
+        Ok(true) => {
+            tx.commit().await.map_err(|_e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to commit transaction".to_string(),
+                )
+            })?;
+            Ok(Json(data))
+        }
         Ok(false) => Err((
             StatusCode::NOT_FOUND,
             "component instance not found".to_string(),
@@ -447,8 +517,23 @@ async fn delete_component_by_id_for_entity(
     let component =
         Component::new(component_str).ok_or((StatusCode::BAD_REQUEST, "invalid component name"))?;
 
-    match crate::sql::component::delete(&pool, &entity, &component).await {
-        Ok(true) => Ok(StatusCode::NO_CONTENT),
+    let mut tx = pool.begin().await.map_err(|_e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to begin transaction",
+        )
+    })?;
+
+    match crate::sql::component::delete(&mut tx, &entity, &component).await {
+        Ok(true) => {
+            tx.commit().await.map_err(|_e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to commit transaction",
+                )
+            })?;
+            Ok(StatusCode::NO_CONTENT)
+        }
         Ok(false) => Err((StatusCode::NOT_FOUND, "component instance not found")),
         Err(_) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -466,8 +551,23 @@ async fn delete_components_for_entity(
         .parse()
         .map_err(|_| (StatusCode::BAD_REQUEST, "invalid entity ID"))?;
 
-    match crate::sql::component::delete_all_for_entity(&pool, &entity).await {
-        Ok(_) => Ok(StatusCode::NO_CONTENT),
+    let mut tx = pool.begin().await.map_err(|_e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to begin transaction",
+        )
+    })?;
+
+    match crate::sql::component::delete_all_for_entity(&mut tx, &entity).await {
+        Ok(_) => {
+            tx.commit().await.map_err(|_e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to commit transaction",
+                )
+            })?;
+            Ok(StatusCode::NO_CONTENT)
+        }
         Err(_) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             "failed to delete component instances",
