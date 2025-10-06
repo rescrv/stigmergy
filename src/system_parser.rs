@@ -10,7 +10,6 @@
 //! ---
 //! name: example-system
 //! description: An example system configuration
-//! tools: Tool1, Tool2, Tool3
 //! model: inherit
 //! color: blue
 //! ---
@@ -35,7 +34,6 @@
 //! let config_content = r#"---
 //! name: my-system
 //! description: A sample system configuration
-//! tools: Glob, Grep, Read
 //! model: inherit
 //! color: green
 //! ---
@@ -47,7 +45,6 @@
 //!
 //! let config = SystemParser::parse(config_content).unwrap();
 //! assert_eq!(config.name, stigmergy::SystemName::new("my-system").unwrap());
-//! assert_eq!(config.tools, vec!["Glob", "Grep", "Read"]);
 //! assert_eq!(config.content.trim(), "My System\n\nThis system does amazing things.");
 //! ```
 
@@ -92,7 +89,6 @@ mod bid_serde {
 /// All fields except `content` are extracted from the frontmatter section:
 /// - `name`: System identifier (required)
 /// - `description`: Human-readable description (required)
-/// - `tools`: List of available tools (required, comma-separated in source)
 /// - `model`: Model specification (required)
 /// - `color`: UI color identifier (required)
 /// - `bid`: List of bid expressions (optional, parsed from bullet list format)
@@ -103,8 +99,6 @@ pub struct SystemConfig {
     pub name: SystemName,
     /// A description of what the system does (required field)
     pub description: String,
-    /// List of tools available to the system (required field, parsed from comma-separated values)
-    pub tools: Vec<String>,
     /// The model configuration (required field, often "inherit")
     pub model: String,
     /// The color theme for the system (required field)
@@ -230,21 +224,6 @@ impl SystemConfig {
             ));
         }
 
-        // Validate tools (each tool name should be reasonable)
-        for tool in &self.tools {
-            if tool.is_empty() {
-                return Err(ParseError::ValidationError(
-                    "Tool names cannot be empty".to_string(),
-                ));
-            }
-            if tool.len() > 50 {
-                return Err(ParseError::ValidationError(format!(
-                    "Tool name '{}' exceeds 50 characters",
-                    tool
-                )));
-            }
-        }
-
         // Validate bid expressions (reasonable limit on count)
         if self.bid.len() > 100 {
             return Err(ParseError::ValidationError(
@@ -302,7 +281,6 @@ impl SystemParser {
     /// # Required Fields
     /// - `name`: System identifier
     /// - `description`: Human-readable description
-    /// - `tools`: Comma-separated list of available tools
     /// - `model`: Model specification
     /// - `color`: UI color identifier
     ///
@@ -314,7 +292,6 @@ impl SystemParser {
     /// let content = r#"---
     /// name: test-system
     /// description: A test system
-    /// tools: Grep, Glob
     /// model: inherit
     /// color: red
     /// ---
@@ -324,7 +301,6 @@ impl SystemParser {
     ///
     /// let config = SystemParser::parse(content).unwrap();
     /// assert_eq!(config.name, stigmergy::SystemName::new("test-system").unwrap());
-    /// assert_eq!(config.tools.len(), 2);
     /// ```
     ///
     /// # Errors
@@ -343,7 +319,6 @@ impl SystemParser {
         let config = SystemConfig {
             name,
             description: Self::get_required_field(&header_data, "description")?,
-            tools: Self::parse_tools(&header_data)?,
             model: Self::get_required_field(&header_data, "model")?,
             color: Self::get_required_field(&header_data, "color")?,
             bid: Self::parse_bid(&header_data)?,
@@ -444,15 +419,6 @@ impl SystemParser {
             .ok_or_else(|| ParseError::MissingRequiredField(field.to_string()))
     }
 
-    fn parse_tools(data: &HashMap<String, String>) -> Result<Vec<String>, ParseError> {
-        let tools_str = Self::get_required_field(data, "tools")?;
-        Ok(tools_str
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect())
-    }
-
     fn parse_bid(data: &HashMap<String, String>) -> Result<Vec<Bid>, ParseError> {
         // bid field is optional
         if let Some(bid_str) = data.get("bid") {
@@ -504,7 +470,6 @@ mod tests {
         let content = r#"---
 name: dry-principal
 description: Use this agent when you need to identify and eliminate code duplication
-tools: Glob, Grep, Read, Edit
 model: inherit
 color: purple
 ---
@@ -519,7 +484,6 @@ You are the DRY Principal, an expert code architect.
             config.description,
             "Use this agent when you need to identify and eliminate code duplication"
         );
-        assert_eq!(config.tools, vec!["Glob", "Grep", "Read", "Edit"]);
         assert_eq!(config.model, "inherit");
         assert_eq!(config.color, "purple");
         assert_eq!(config.bid, Vec::<Bid>::new()); // No bid field in test content, so empty
@@ -552,7 +516,6 @@ Content here
         let content = r#"---
 name: example-system
 description: A system with bid expressions
-tools: Glob, Grep
 model: inherit
 color: blue
 bid:
@@ -580,7 +543,6 @@ System content with bids.
         let content = r#"---
 name: test-system
 description: Testing whitespace-tolerant bullets
-tools: Read
 model: inherit
 color: green
 bid:
@@ -601,7 +563,6 @@ Content here.
         let content = r#"---
 name: empty-bid
 description: System with empty bid section
-tools: Read
 model: inherit
 color: red
 bid:
@@ -619,7 +580,6 @@ Content here.
         let content = r#"---
 name: no-bid
 description: System without bid field
-tools: Read
 model: inherit
 color: yellow
 ---
@@ -636,7 +596,6 @@ Content here.
         let content = r#"---
 name: invalid-bid
 description: System with invalid bid
-tools: Read
 model: inherit
 color: blue
 bid:
@@ -656,7 +615,6 @@ Content.
             r#"---
 name: too-many-bids
 description: System with too many bids
-tools: Read
 model: inherit
 color: blue
 bid:
@@ -682,7 +640,6 @@ Content.
         let content = r#"---
 name: single-bid
 description: System with a single bid
-tools: Read
 model: inherit
 color: blue
 bid:
@@ -706,7 +663,6 @@ Content.
         let content = r#"---
 name: multiple-bids
 description: System with multiple bids
-tools: Read, Write
 model: inherit
 color: green
 bid:
@@ -734,7 +690,6 @@ System content.
         let content = r#"---
 name: complex-bids
 description: System with complex bid expressions
-tools: Grep, Edit
 model: inherit
 color: red
 bid:
@@ -762,7 +717,6 @@ Complex system.
         let content = r#"---
 name: whitespace-test
 description: Testing whitespace handling in bids
-tools: Read
 model: inherit
 color: blue
 bid:
@@ -791,7 +745,6 @@ Content.
         let content = r#"---
 name: no-bullets
 description: Bid lines without bullet points
-tools: Read
 model: inherit
 color: yellow
 bid:
@@ -819,7 +772,6 @@ Content.
         let content = r#"---
 name: mixed-bullets
 description: Mixed bullet point formats
-tools: Read
 model: inherit
 color: purple
 bid:
@@ -842,7 +794,6 @@ Content.
         let content = r#"---
 name: empty-lines
 description: Bid section with empty lines
-tools: Read
 model: inherit
 color: orange
 bid:
@@ -868,7 +819,6 @@ Content.
         let content = r#"---
 name: string-literals
 description: Bid expressions with string literals
-tools: Read
 model: inherit
 color: blue
 bid:
@@ -893,7 +843,6 @@ Content.
         let content = r#"---
 name: numeric-literals
 description: Bid expressions with various numeric types
-tools: Read
 model: inherit
 color: purple
 bid:
@@ -915,7 +864,6 @@ Content.
         let content = r#"---
 name: boolean-literals
 description: Bid expressions with boolean values
-tools: Read
 model: inherit
 color: blue
 bid:
@@ -937,7 +885,6 @@ Content.
         let content = r#"---
 name: arithmetic-ops
 description: Bid expressions with all arithmetic operators
-tools: Read
 model: inherit
 color: green
 bid:
@@ -961,7 +908,6 @@ Content.
         let content = r#"---
 name: comparison-ops
 description: Bid expressions with all comparison operators
-tools: Read
 model: inherit
 color: blue
 bid:
@@ -985,7 +931,6 @@ Content.
         let content = r#"---
 name: logical-ops
 description: Bid expressions with logical operators
-tools: Read
 model: inherit
 color: blue
 bid:
@@ -1007,7 +952,6 @@ Content.
         let content = r#"---
 name: regex-ops
 description: Bid expressions with regex match operators
-tools: Read
 model: inherit
 color: green
 bid:
@@ -1028,7 +972,6 @@ Content.
         let content = r#"---
 name: complex-paths
 description: Bid expressions with complex variable paths
-tools: Read
 model: inherit
 color: red
 bid:
@@ -1053,7 +996,6 @@ Content.
         let content = r#"---
 name: parentheses-precedence
 description: Bid expressions with parentheses for precedence
-tools: Read
 model: inherit
 color: blue
 bid:
@@ -1075,7 +1017,6 @@ Content.
         let content = r#"---
 name: unary-ops
 description: Bid expressions with unary operators
-tools: Read
 model: inherit
 color: purple
 bid:
@@ -1097,7 +1038,6 @@ Content.
         let content = r#"---
 name: member-access
 description: Bid expressions with member access on dereferenced values
-tools: Read
 model: inherit
 color: gray
 bid:
@@ -1129,7 +1069,6 @@ Content.
                 r#"---
 name: invalid-bid
 description: System with invalid bid
-tools: Read
 model: inherit
 color: red
 bid:
@@ -1155,7 +1094,6 @@ Content.
         let content = r#"---
 name: precedence-test
 description: Testing operator precedence in bids
-tools: Read
 model: inherit
 color: yellow
 bid:
@@ -1177,7 +1115,6 @@ Content.
         let content = r#"---
 name: inline-bid
 description: Bid field with inline value (should be empty)
-tools: Read
 model: inherit
 color: orange
 bid: ON inline BID value
@@ -1200,7 +1137,6 @@ Content.
         let content = r#"---
 name: mixed-format
 description: Mixed inline and multiline bid format
-tools: Read
 model: inherit
 color: pink
 bid: ON first BID first_value
@@ -1221,7 +1157,6 @@ Content.
         let content = r#"---
 name: empty-bullet
 description: Bid with empty bullet point
-tools: Read
 model: inherit
 color: yellow
 bid:
@@ -1243,7 +1178,6 @@ Content.
         let content = r#"---
 name: special-chars
 description: Variables with underscores and numbers
-tools: Read
 model: inherit
 color: yellow
 bid:
@@ -1268,7 +1202,6 @@ Content.
             r#"---
 name: long-expressions
 description: Very long bid expressions
-tools: Read
 model: inherit
 color: orange
 bid:
@@ -1295,7 +1228,6 @@ Content.
             r#"---
 name: limit-test
 description: Exactly 100 bids
-tools: Read
 model: inherit
 color: blue
 bid:
@@ -1319,7 +1251,6 @@ Content.
         let content = r#"---
 name: unicode-strings
 description: Bid with unicode characters in strings
-tools: Read
 model: inherit
 color: purple
 bid:
@@ -1343,7 +1274,6 @@ Content.
         let content = r#"---
 name: float-precision
 description: Bid with high precision floating point numbers
-tools: Read
 model: inherit
 color: green
 bid:
@@ -1364,7 +1294,6 @@ Content.
         let content = r#"---
 name: integration-test
 description: Bid integration with all other SystemConfig fields
-tools: Glob, Grep, Read, Edit, Write
 model: gpt-4
 color: #FF5733
 bid:
@@ -1386,7 +1315,6 @@ The bids should work alongside all other configuration.
 
         // Verify all fields parsed correctly
         assert_eq!(config.name, SystemName::new("integration-test").unwrap());
-        assert_eq!(config.tools.len(), 5);
         assert_eq!(config.model, "gpt-4");
         assert_eq!(config.color, "#FF5733");
         assert_eq!(config.bid.len(), 3);
@@ -1401,7 +1329,6 @@ The bids should work alongside all other configuration.
         let content = r#"---
 name: error-test
 description: Test bid error message quality
-tools: Read
 model: inherit
 color: red
 bid:
@@ -1435,7 +1362,6 @@ Content.
             r#"---
 name: stress-test
 description: Stress test with complex bid
-tools: Read
 model: inherit
 color: yellow
 bid:
@@ -1456,10 +1382,6 @@ Content.
         let yaml = r#"
 name: test-system
 description: A test system configuration
-tools:
-  - Glob
-  - Grep
-  - Read
 model: inherit
 color: blue
 bid:
@@ -1473,7 +1395,6 @@ content: |
         let config: SystemConfig = serde_yml::from_str(yaml).unwrap();
         assert_eq!(config.name, SystemName::new("test-system").unwrap());
         assert_eq!(config.description, "A test system configuration");
-        assert_eq!(config.tools, vec!["Glob", "Grep", "Read"]);
         assert_eq!(config.model, "inherit");
         assert_eq!(config.color, "blue");
         assert_eq!(config.bid.len(), 2);
@@ -1485,7 +1406,6 @@ content: |
         let original = SystemConfig {
             name: SystemName::new("roundtrip-test").unwrap(),
             description: "Testing roundtrip".to_string(),
-            tools: vec!["Read".to_string(), "Write".to_string()],
             model: "inherit".to_string(),
             color: "green".to_string(),
             bid: vec![],
@@ -1497,7 +1417,6 @@ content: |
 
         assert_eq!(original.name, deserialized.name);
         assert_eq!(original.description, deserialized.description);
-        assert_eq!(original.tools, deserialized.tools);
         assert_eq!(original.model, deserialized.model);
         assert_eq!(original.color, deserialized.color);
         assert_eq!(original.bid, deserialized.bid);

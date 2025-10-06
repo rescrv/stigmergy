@@ -62,20 +62,18 @@ pub async fn create(tx: &mut Transaction<'_, Postgres>, system: &System) -> SqlR
     let model = &system.config.model;
     let color = &system.config.color;
     let content = &system.config.content;
-    let tools = &system.config.tools;
     let bids: Vec<String> = system.config.bid.iter().map(|b| b.to_string()).collect();
 
     let result = sqlx::query!(
         r#"
-        INSERT INTO systems (system_name, description, model, color, content, tools, bids)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO systems (system_name, description, model, color, content, bids)
+        VALUES ($1, $2, $3, $4, $5, $6)
         "#,
         system_name,
         description,
         model,
         color,
         content,
-        tools as &[String],
         &bids as &[String]
     )
     .execute(&mut **tx)
@@ -111,7 +109,7 @@ pub async fn get(
 
     let result = sqlx::query!(
         r#"
-        SELECT system_name, description, model, color, content, tools, bids, created_at, updated_at
+        SELECT system_name, description, model, color, content, bids, created_at, updated_at
         FROM systems
         WHERE system_name = $1
         "#,
@@ -136,7 +134,6 @@ pub async fn get(
             let config = crate::SystemConfig {
                 name,
                 description: row.description.unwrap_or_default(),
-                tools: row.tools,
                 model: row.model,
                 color: row.color.unwrap_or_default(),
                 bid: bids,
@@ -173,13 +170,12 @@ pub async fn update(tx: &mut Transaction<'_, Postgres>, system: &System) -> SqlR
     let model = &system.config.model;
     let color = &system.config.color;
     let content = &system.config.content;
-    let tools = &system.config.tools;
     let bids: Vec<String> = system.config.bid.iter().map(|b| b.to_string()).collect();
 
     let result = sqlx::query!(
         r#"
         UPDATE systems
-        SET description = $2, model = $3, color = $4, content = $5, tools = $6, bids = $7, updated_at = CURRENT_TIMESTAMP
+        SET description = $2, model = $3, color = $4, content = $5, bids = $6, updated_at = CURRENT_TIMESTAMP
         WHERE system_name = $1
         "#,
         system_name,
@@ -187,7 +183,6 @@ pub async fn update(tx: &mut Transaction<'_, Postgres>, system: &System) -> SqlR
         model,
         color,
         content,
-        tools as &[String],
         &bids as &[String]
     )
     .execute(&mut **tx)
@@ -271,7 +266,7 @@ pub async fn delete_all(tx: &mut Transaction<'_, Postgres>) -> SqlResult<u32> {
 pub async fn list(tx: &mut Transaction<'_, Postgres>) -> SqlResult<Vec<System>> {
     let result = sqlx::query!(
         r#"
-        SELECT system_name, description, model, color, content, tools, bids, created_at, updated_at
+        SELECT system_name, description, model, color, content, bids, created_at, updated_at
         FROM systems
         ORDER BY created_at ASC
         "#
@@ -298,7 +293,6 @@ pub async fn list(tx: &mut Transaction<'_, Postgres>) -> SqlResult<Vec<System>> 
                 let config = crate::SystemConfig {
                     name,
                     description: row.description.unwrap_or_default(),
-                    tools: row.tools,
                     model: row.model,
                     color: row.color.unwrap_or_default(),
                     bid: bids,
@@ -330,7 +324,6 @@ mod tests {
         let config = SystemConfig {
             name,
             description: format!("Test system for {}", test_name),
-            tools: vec!["Read".to_string(), "Write".to_string()],
             model: "inherit".to_string(),
             color: "blue".to_string(),
             bid: Vec::new(),
@@ -366,7 +359,6 @@ mod tests {
         let retrieved = retrieved.unwrap();
         assert_eq!(retrieved.config.name, system.config.name);
         assert_eq!(retrieved.config.description, system.config.description);
-        assert_eq!(retrieved.config.tools, system.config.tools);
         assert!(retrieved.created_at >= db_before);
         assert!(retrieved.created_at <= db_after);
         assert!(retrieved.updated_at >= db_before);

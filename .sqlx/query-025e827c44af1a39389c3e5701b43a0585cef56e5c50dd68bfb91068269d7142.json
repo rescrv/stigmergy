@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT system_name, description, model, color, content, tools, bids, created_at, updated_at\n        FROM systems\n        WHERE system_name = $1\n        ",
+  "query": "\n        SELECT system_name, description, model, color, content, bids, created_at, updated_at\n        FROM systems\n        ORDER BY created_at ASC\n        ",
   "describe": {
     "columns": [
       {
@@ -30,29 +30,22 @@
       },
       {
         "ordinal": 5,
-        "name": "tools",
-        "type_info": "TextArray"
-      },
-      {
-        "ordinal": 6,
         "name": "bids",
         "type_info": "TextArray"
       },
       {
-        "ordinal": 7,
+        "ordinal": 6,
         "name": "created_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 8,
+        "ordinal": 7,
         "name": "updated_at",
         "type_info": "Timestamptz"
       }
     ],
     "parameters": {
-      "Left": [
-        "Text"
-      ]
+      "Left": []
     },
     "nullable": [
       false,
@@ -62,9 +55,8 @@
       true,
       false,
       false,
-      false,
       false
     ]
   },
-  "hash": "aca9809a932567c2ac853d5432fbd86277d01d1038769d695521292012819731"
+  "hash": "025e827c44af1a39389c3e5701b43a0585cef56e5c50dd68bfb91068269d7142"
 }

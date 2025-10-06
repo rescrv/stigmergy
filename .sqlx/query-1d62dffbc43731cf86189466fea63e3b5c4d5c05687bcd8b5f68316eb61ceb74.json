@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE systems\n        SET description = $2, model = $3, color = $4, content = $5, bids = $6, updated_at = CURRENT_TIMESTAMP\n        WHERE system_name = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Varchar",
+        "Varchar",
+        "Text",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1d62dffbc43731cf86189466fea63e3b5c4d5c05687bcd8b5f68316eb61ceb74"
+}

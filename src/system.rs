@@ -511,13 +511,6 @@ async fn patch_system(
     if let Some(content) = patch_obj.get("content").and_then(|v| v.as_str()) {
         config.content = content.to_string();
     }
-    if let Some(tools) = patch_obj.get("tools").and_then(|v| v.as_array()) {
-        config.tools = tools
-            .iter()
-            .filter_map(|v| v.as_str())
-            .map(|s| s.to_string())
-            .collect();
-    }
 
     system.update_config(config);
 
@@ -631,7 +624,6 @@ mod tests {
         SystemConfig {
             name: SystemName::new("test-system").unwrap(),
             description: "A test system".to_string(),
-            tools: vec!["Read".to_string(), "Write".to_string()],
             model: "inherit".to_string(),
             color: "blue".to_string(),
             bid: Vec::new(),

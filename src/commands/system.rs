@@ -37,7 +37,7 @@ async fn handle_system_create(args: &[String], client: &http_utils::StigmergyCli
         2,
         "create",
         r#"Usage: stigctl system create <config-json>
-Example: stigctl system create '{"name":"test","description":"A test system","tools":["Read","Write"],"model":"inherit","color":"blue","content":"You are a test system."}}'"#,
+Example: stigctl system create '{"name":"test","description":"A test system","model":"inherit","color":"blue","bid":[],"content":"You are a test system."}}'"#,
     );
 
     let config_str = &args[1];
