@@ -10,6 +10,7 @@
 //! - `system` - System management commands (create, list, get, update, delete)
 //! - `component_definition` - Component definition commands (create, list, get, update, delete)
 //! - `component` - Component instance commands (create, list, get, update, delete)
+//! - `invariant` - Invariant management commands (create, list, get, update, delete)
 //! - `shared` - Shared utilities and validation functions
 
 pub mod component;
@@ -17,10 +18,12 @@ pub mod component_definition;
 pub mod entity;
 pub mod error_extensions;
 pub mod errors;
+pub mod invariant;
 pub mod shared;
 pub mod system;
 
 pub use component::handle_component_command;
 pub use component_definition::handle_componentdefinition_command;
 pub use entity::handle_entity_command;
+pub use invariant::handle_invariant_command;
 pub use system::handle_system_command;

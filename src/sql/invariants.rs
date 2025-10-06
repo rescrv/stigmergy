@@ -16,7 +16,7 @@ pub type SqlResult<T> = Result<T, DataStoreError>;
 pub struct InvariantRecord {
     /// The invariant identifier.
     pub invariant_id: InvariantID,
-    /// The assertion or condition that must be met.
+    /// The assertion expression as a string.
     pub asserts: String,
     /// When the invariant was created.
     pub created_at: DateTime<Utc>,
@@ -31,7 +31,7 @@ pub struct InvariantRecord {
 /// # Arguments
 /// * `pool` - PostgreSQL connection pool
 /// * `invariant_id` - The invariant identifier to create
-/// * `asserts` - The assertion or condition that must be met
+/// * `asserts` - The assertion expression as a string
 ///
 /// # Returns
 /// * `Ok(())` - Invariant created successfully
@@ -44,7 +44,7 @@ pub struct InvariantRecord {
 /// # use sqlx::PgPool;
 /// # async fn example(pool: PgPool) -> Result<(), Box<dyn std::error::Error>> {
 /// let invariant_id = InvariantID::new([1u8; 32]);
-/// sql::invariants::create(&pool, &invariant_id, "x > 0").await?;
+/// sql::invariants::create(&pool, &invariant_id, "x > 0 && y < 100").await?;
 /// # Ok(())
 /// # }
 /// ```
@@ -125,7 +125,7 @@ pub async fn get(pool: &PgPool, invariant_id: &InvariantID) -> SqlResult<Option<
 /// # Arguments
 /// * `pool` - PostgreSQL connection pool
 /// * `invariant_id` - The invariant to update
-/// * `asserts` - The new assertion text
+/// * `asserts` - The new assertion expression as a string
 ///
 /// # Returns
 /// * `Ok(true)` - Invariant existed and was updated

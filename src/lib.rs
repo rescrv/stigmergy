@@ -194,7 +194,10 @@ pub use entity::{
     CreateEntityRequest, CreateEntityResponse, Entity, EntityParseError, create_entity_router,
 };
 pub use errors::DataStoreError;
-pub use invariant::{InvariantID, InvariantIDParseError};
+pub use invariant::{
+    CreateInvariantRequest, CreateInvariantResponse, GetInvariantResponse, InvariantID,
+    InvariantIDParseError, UpdateInvariantRequest, create_invariant_router,
+};
 pub use json_schema::{JsonSchema, JsonSchemaBuilder};
 pub use system::{
     CreateSystemFromMarkdownRequest, CreateSystemResponse, System, SystemListItem, SystemName,

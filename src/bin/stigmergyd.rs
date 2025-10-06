@@ -6,7 +6,7 @@ use tokio::signal;
 
 use stigmergy::{
     create_component_definition_router, create_component_instance_router, create_entity_router,
-    create_system_router,
+    create_invariant_router, create_system_router,
 };
 
 #[derive(CommandLine, Default, PartialEq, Eq)]
@@ -69,7 +69,14 @@ API ENDPOINTS:
       PUT    /api/v1/component/{id}  Update a component
       PATCH  /api/v1/component/{id}  Patch a component
       DELETE /api/v1/component/{id}  Delete a component
-      DELETE /api/v1/component       Delete all components"#;
+      DELETE /api/v1/component       Delete all components
+
+    Invariants:
+      GET    /api/v1/invariant       List all invariants
+      POST   /api/v1/invariant       Create an invariant
+      GET    /api/v1/invariant/{id}  Get a specific invariant
+      PUT    /api/v1/invariant/{id}  Update an invariant
+      DELETE /api/v1/invariant/{id}  Delete an invariant"#;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -112,12 +119,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let component_definition_router = create_component_definition_router(pool.clone());
     let component_router = create_component_instance_router(pool.clone());
     let system_router = create_system_router(pool.clone());
+    let invariant_router = create_invariant_router(pool.clone());
 
     let app = Router::new()
         .nest("/api/v1", entity_router)
         .nest("/api/v1", component_definition_router)
         .nest("/api/v1", component_router)
-        .nest("/api/v1", system_router);
+        .nest("/api/v1", system_router)
+        .nest("/api/v1", invariant_router);
 
     // Bind to address
     let addr = format!("{}:{}", config.host, config.port);
@@ -229,5 +238,12 @@ fn print_api_endpoints() {
     println!("    PATCH  /api/v1/component/{{id}}  Patch a component");
     println!("    DELETE /api/v1/component/{{id}}  Delete a component");
     println!("    DELETE /api/v1/component       Delete all components");
+    println!();
+    println!("  Invariants:");
+    println!("    GET    /api/v1/invariant       List all invariants");
+    println!("    POST   /api/v1/invariant       Create an invariant");
+    println!("    GET    /api/v1/invariant/{{id}}  Get a specific invariant");
+    println!("    PUT    /api/v1/invariant/{{id}}  Update an invariant");
+    println!("    DELETE /api/v1/invariant/{{id}}  Delete an invariant");
     println!();
 }

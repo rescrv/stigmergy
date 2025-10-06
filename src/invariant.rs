@@ -42,6 +42,12 @@ use std::fs::File;
 use std::io::Read;
 use std::str::FromStr;
 
+use axum::Router;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::Json;
+use axum::routing::get;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 ////////////////////////////////////////////// Constants ///////////////////////////////////////////////
@@ -442,6 +448,221 @@ impl<'de> serde::de::Visitor<'de> for InvariantIDVisitor {
         bytes.copy_from_slice(&decoded);
         Ok(InvariantID(bytes))
     }
+}
+
+////////////////////////////////////////// HTTP Request/Response Types ////////////////////////////////////
+
+/// Request structure for creating a new invariant.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct CreateInvariantRequest {
+    /// Optional invariant ID. If not provided, a random one will be generated.
+    pub invariant_id: Option<InvariantID>,
+    /// The assertion expression as a string.
+    pub asserts: String,
+}
+
+/// Response structure for invariant creation.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct CreateInvariantResponse {
+    /// The created invariant's ID.
+    pub invariant_id: InvariantID,
+    /// The assertion expression.
+    pub asserts: String,
+}
+
+/// Response structure for getting an invariant.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct GetInvariantResponse {
+    /// The invariant's ID.
+    pub invariant_id: InvariantID,
+    /// The assertion expression.
+    pub asserts: String,
+    /// When the invariant was created.
+    pub created_at: DateTime<Utc>,
+    /// When the invariant was last updated.
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Request structure for updating an invariant.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct UpdateInvariantRequest {
+    /// The new assertion expression.
+    pub asserts: String,
+}
+
+////////////////////////////////////////////// HTTP Handlers //////////////////////////////////////////////
+
+/// HTTP endpoint for creating a new invariant.
+async fn create_invariant(
+    State(pool): State<sqlx::PgPool>,
+    Json(request): Json<CreateInvariantRequest>,
+) -> Result<(StatusCode, Json<CreateInvariantResponse>), (StatusCode, &'static str)> {
+    let invariant_id = request
+        .invariant_id
+        .map(Ok)
+        .unwrap_or_else(InvariantID::random_url_safe)
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to generate invariant id",
+            )
+        })?;
+
+    match crate::sql::invariants::create(&pool, &invariant_id, &request.asserts).await {
+        Ok(()) => Ok((
+            StatusCode::CREATED,
+            Json(CreateInvariantResponse {
+                invariant_id,
+                asserts: request.asserts,
+            }),
+        )),
+        Err(crate::DataStoreError::AlreadyExists) => {
+            Err((StatusCode::CONFLICT, "invariant already exists"))
+        }
+        Err(_) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to create invariant",
+        )),
+    }
+}
+
+/// HTTP endpoint for getting a specific invariant by ID.
+async fn get_invariant(
+    State(pool): State<sqlx::PgPool>,
+    Path(invariant_base64): Path<String>,
+) -> Result<Json<GetInvariantResponse>, (StatusCode, &'static str)> {
+    let invariant_string = format!("{}{}", INVARIANT_PREFIX, invariant_base64);
+
+    let invariant_id = InvariantID::from_str(&invariant_string)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid invariant id"))?;
+
+    match crate::sql::invariants::get(&pool, &invariant_id).await {
+        Ok(Some(record)) => Ok(Json(GetInvariantResponse {
+            invariant_id: record.invariant_id,
+            asserts: record.asserts,
+            created_at: record.created_at,
+            updated_at: record.updated_at,
+        })),
+        Ok(None) => Err((StatusCode::NOT_FOUND, "invariant not found")),
+        Err(_) => Err((StatusCode::INTERNAL_SERVER_ERROR, "failed to get invariant")),
+    }
+}
+
+/// HTTP endpoint for updating an existing invariant.
+async fn update_invariant(
+    State(pool): State<sqlx::PgPool>,
+    Path(invariant_base64): Path<String>,
+    Json(request): Json<UpdateInvariantRequest>,
+) -> Result<Json<GetInvariantResponse>, (StatusCode, &'static str)> {
+    let invariant_string = format!("{}{}", INVARIANT_PREFIX, invariant_base64);
+
+    let invariant_id = InvariantID::from_str(&invariant_string)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid invariant id"))?;
+
+    match crate::sql::invariants::update(&pool, &invariant_id, &request.asserts).await {
+        Ok(true) => match crate::sql::invariants::get(&pool, &invariant_id).await {
+            Ok(Some(record)) => Ok(Json(GetInvariantResponse {
+                invariant_id: record.invariant_id,
+                asserts: record.asserts,
+                created_at: record.created_at,
+                updated_at: record.updated_at,
+            })),
+            Ok(None) => Err((StatusCode::NOT_FOUND, "invariant not found")),
+            Err(_) => Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to get updated invariant",
+            )),
+        },
+        Ok(false) => Err((StatusCode::NOT_FOUND, "invariant not found")),
+        Err(_) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to update invariant",
+        )),
+    }
+}
+
+/// HTTP endpoint for deleting an invariant by ID.
+async fn delete_invariant(
+    State(pool): State<sqlx::PgPool>,
+    Path(invariant_base64): Path<String>,
+) -> Result<StatusCode, (StatusCode, &'static str)> {
+    let invariant_string = format!("{}{}", INVARIANT_PREFIX, invariant_base64);
+
+    let invariant_id = InvariantID::from_str(&invariant_string)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid invariant id"))?;
+
+    match crate::sql::invariants::delete(&pool, &invariant_id).await {
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Err((StatusCode::NOT_FOUND, "invariant not found")),
+        Err(_) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to delete invariant",
+        )),
+    }
+}
+
+/// HTTP endpoint for listing all invariants.
+async fn list_invariants(
+    State(pool): State<sqlx::PgPool>,
+) -> Result<Json<Vec<GetInvariantResponse>>, (StatusCode, &'static str)> {
+    match crate::sql::invariants::list(&pool).await {
+        Ok(records) => {
+            let responses = records
+                .into_iter()
+                .map(|record| GetInvariantResponse {
+                    invariant_id: record.invariant_id,
+                    asserts: record.asserts,
+                    created_at: record.created_at,
+                    updated_at: record.updated_at,
+                })
+                .collect();
+            Ok(Json(responses))
+        }
+        Err(_) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to list invariants",
+        )),
+    }
+}
+
+////////////////////////////////////////////// Router //////////////////////////////////////////////////
+
+/// Creates an Axum router with invariant management endpoints.
+///
+/// # Arguments
+/// * `pool` - PostgreSQL connection pool for invariant operations
+///
+/// # Routes
+/// - `GET /invariant` - List all invariants
+/// - `POST /invariant` - Create a new invariant
+/// - `GET /invariant/{invariant_id}` - Get a specific invariant by ID
+/// - `PUT /invariant/{invariant_id}` - Update an invariant by ID
+/// - `DELETE /invariant/{invariant_id}` - Delete an invariant by ID
+///
+/// # Returns
+/// An Axum `Router` configured with the invariant endpoints and state.
+///
+/// # Examples
+/// ```no_run
+/// # use stigmergy::create_invariant_router;
+/// # use sqlx::PgPool;
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// # let database_url = "postgres://localhost/stigmergy";
+/// let pool = PgPool::connect(database_url).await?;
+/// let router = create_invariant_router(pool);
+/// # Ok(())
+/// # }
+/// ```
+pub fn create_invariant_router(pool: sqlx::PgPool) -> Router {
+    Router::new()
+        .route("/invariant", get(list_invariants).post(create_invariant))
+        .route(
+            "/invariant/:invariant_id",
+            get(get_invariant)
+                .put(update_invariant)
+                .delete(delete_invariant),
+        )
+        .with_state(pool)
 }
 
 #[cfg(test)]

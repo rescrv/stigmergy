@@ -5,7 +5,7 @@ use stigmergy::{
     cli_utils,
     commands::{
         handle_component_command, handle_componentdefinition_command, handle_entity_command,
-        handle_system_command,
+        handle_invariant_command, handle_system_command,
     },
     http_utils,
 };
@@ -37,7 +37,12 @@ Commands:
   component list <entity-id>                   List all component instances for an entity
   component get <entity-id> <comp-id>          Get a component instance by ID for an entity
   component update <entity-id> <comp-id> <data> Update a component instance for an entity
-  component delete <entity-id> <comp-id>       Delete a component instance from an entity"#;
+  component delete <entity-id> <comp-id>       Delete a component instance from an entity
+  invariant create <expression> [id]           Create an invariant
+  invariant list                               List all invariants
+  invariant get <invariant-id>                 Get an invariant by ID
+  invariant update <invariant-id> <expression> Update an invariant
+  invariant delete <invariant-id>              Delete an invariant"#;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -68,9 +73,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "component" => {
             handle_component_command(&free[1..], &client).await;
         }
+        "invariant" => {
+            handle_invariant_command(&free[1..], &client).await;
+        }
         _ => {
             cli_utils::exit_with_error(&format!(
-                "Unknown command '{}'. Available commands: entity, system, componentdefinition, component",
+                "Unknown command '{}'. Available commands: entity, system, componentdefinition, component, invariant",
                 free[0]
             ));
         }
