@@ -16,8 +16,13 @@ const INVARIANT_USAGE: &str = "Usage: stigctl invariant <create|list|get|update|
 /// # Arguments
 /// * `args` - Command arguments (first element is the subcommand)
 /// * `client` - HTTP client for API communication
-pub async fn handle_invariant_command(args: &[String], client: &http_utils::StigmergyClient) {
-    dispatch_command!("invariant", INVARIANT_USAGE, args, client, {
+/// * `output_format` - Output format for get/list commands
+pub async fn handle_invariant_command(
+    args: &[String],
+    client: &http_utils::StigmergyClient,
+    output_format: cli_utils::OutputFormat,
+) {
+    dispatch_command!("invariant", INVARIANT_USAGE, args, client, output_format, {
         "create" => handle_invariant_create,
         "list" => handle_invariant_list,
         "get" => handle_invariant_get,
@@ -27,7 +32,11 @@ pub async fn handle_invariant_command(args: &[String], client: &http_utils::Stig
 }
 
 /// Handles invariant creation.
-async fn handle_invariant_create(args: &[String], client: &http_utils::StigmergyClient) {
+async fn handle_invariant_create(
+    args: &[String],
+    client: &http_utils::StigmergyClient,
+    _output_format: cli_utils::OutputFormat,
+) {
     validate_args_count_or_exit(
         args,
         2,
@@ -70,7 +79,11 @@ Example: stigctl invariant create "x > 0" invariant:AAAA..."#,
 }
 
 /// Handles invariant listing.
-async fn handle_invariant_list(args: &[String], client: &http_utils::StigmergyClient) {
+async fn handle_invariant_list(
+    args: &[String],
+    client: &http_utils::StigmergyClient,
+    output_format: cli_utils::OutputFormat,
+) {
     validate_args_count_or_exit(args, 1, 1, "list", "Usage: stigctl invariant list");
 
     let invariants = http_utils::execute_or_exit(
@@ -81,6 +94,10 @@ async fn handle_invariant_list(args: &[String], client: &http_utils::StigmergyCl
 
     if invariants.is_empty() {
         println!("No invariants found");
+    } else if output_format == cli_utils::OutputFormat::Json
+        || output_format == cli_utils::OutputFormat::Yaml
+    {
+        cli_utils::print_formatted_or_exit(&invariants, output_format, "invariants");
     } else {
         for inv in invariants {
             println!("ID:        {}", inv.invariant_id);
@@ -93,7 +110,11 @@ async fn handle_invariant_list(args: &[String], client: &http_utils::StigmergyCl
 }
 
 /// Handles invariant retrieval by ID.
-async fn handle_invariant_get(args: &[String], client: &http_utils::StigmergyClient) {
+async fn handle_invariant_get(
+    args: &[String],
+    client: &http_utils::StigmergyClient,
+    output_format: cli_utils::OutputFormat,
+) {
     validate_args_count_or_exit(
         args,
         2,
@@ -113,14 +134,24 @@ async fn handle_invariant_get(args: &[String], client: &http_utils::StigmergyCli
     let invariant =
         http_utils::execute_or_exit(|| client.get::<GetInvariantResponse>(&path), &error_msg).await;
 
-    println!("ID:        {}", invariant.invariant_id);
-    println!("Asserts:   {}", invariant.asserts);
-    println!("Created:   {}", invariant.created_at);
-    println!("Updated:   {}", invariant.updated_at);
+    if output_format == cli_utils::OutputFormat::Json
+        || output_format == cli_utils::OutputFormat::Yaml
+    {
+        cli_utils::print_formatted_or_exit(&invariant, output_format, "invariant");
+    } else {
+        println!("ID:        {}", invariant.invariant_id);
+        println!("Asserts:   {}", invariant.asserts);
+        println!("Created:   {}", invariant.created_at);
+        println!("Updated:   {}", invariant.updated_at);
+    }
 }
 
 /// Handles invariant update.
-async fn handle_invariant_update(args: &[String], client: &http_utils::StigmergyClient) {
+async fn handle_invariant_update(
+    args: &[String],
+    client: &http_utils::StigmergyClient,
+    output_format: cli_utils::OutputFormat,
+) {
     validate_args_count_or_exit(
         args,
         3,
@@ -149,15 +180,26 @@ async fn handle_invariant_update(args: &[String], client: &http_utils::Stigmergy
     )
     .await;
 
-    println!("Updated invariant:");
-    println!("ID:        {}", invariant.invariant_id);
-    println!("Asserts:   {}", invariant.asserts);
-    println!("Created:   {}", invariant.created_at);
-    println!("Updated:   {}", invariant.updated_at);
+    if output_format == cli_utils::OutputFormat::Json
+        || output_format == cli_utils::OutputFormat::Yaml
+    {
+        println!("Updated invariant:");
+        cli_utils::print_formatted_or_exit(&invariant, output_format, "invariant");
+    } else {
+        println!("Updated invariant:");
+        println!("ID:        {}", invariant.invariant_id);
+        println!("Asserts:   {}", invariant.asserts);
+        println!("Created:   {}", invariant.created_at);
+        println!("Updated:   {}", invariant.updated_at);
+    }
 }
 
 /// Handles invariant deletion.
-async fn handle_invariant_delete(args: &[String], client: &http_utils::StigmergyClient) {
+async fn handle_invariant_delete(
+    args: &[String],
+    client: &http_utils::StigmergyClient,
+    _output_format: cli_utils::OutputFormat,
+) {
     validate_args_count_or_exit(
         args,
         2,

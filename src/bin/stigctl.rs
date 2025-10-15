@@ -2,7 +2,7 @@ use arrrg::CommandLine;
 use arrrg_derive::CommandLine;
 
 use stigmergy::{
-    cli_utils,
+    cli_utils::{self, OutputFormat},
     commands::{
         handle_component_command, handle_componentdefinition_command, handle_entity_command,
         handle_invariant_command, handle_system_command,
@@ -14,9 +14,18 @@ use stigmergy::{
 struct Options {
     #[arrrg(optional, "Base URL of the Stigmergy API server")]
     base_url: String,
+    #[arrrg(
+        optional,
+        "Output format for get/list commands: json or yaml (default: json)"
+    )]
+    output: OutputFormat,
 }
 
-const USAGE: &str = r#"Usage: stigctl <command> [args...]
+const USAGE: &str = r#"Usage: stigctl [options] <command> [args...]
+
+Options:
+  --base-url <url>     Base URL of the Stigmergy API server (default: http://localhost:8080)
+  --output <format>    Output format for get/list commands: json or yaml (default: json)
 
 Commands:
   entity create                                Create a new entity
@@ -62,19 +71,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match free[0].as_str() {
         "entity" => {
-            handle_entity_command(&free[1..], &client).await;
+            handle_entity_command(&free[1..], &client, options.output).await;
         }
         "system" => {
-            handle_system_command(&free[1..], &client).await;
+            handle_system_command(&free[1..], &client, options.output).await;
         }
         "componentdefinition" => {
-            handle_componentdefinition_command(&free[1..], &client).await;
+            handle_componentdefinition_command(&free[1..], &client, options.output).await;
         }
         "component" => {
-            handle_component_command(&free[1..], &client).await;
+            handle_component_command(&free[1..], &client, options.output).await;
         }
         "invariant" => {
-            handle_invariant_command(&free[1..], &client).await;
+            handle_invariant_command(&free[1..], &client, options.output).await;
         }
         _ => {
             cli_utils::exit_with_error(&format!(

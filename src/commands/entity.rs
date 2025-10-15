@@ -4,7 +4,7 @@
 //! and deletion of entities.
 
 use crate::{
-    CreateEntityRequest, CreateEntityResponse, Entity,
+    CreateEntityRequest, CreateEntityResponse, Entity, cli_utils,
     commands::shared::{dispatch_command, parse_entity_id_or_exit, validate_args_count_or_exit},
     http_utils,
 };
@@ -16,8 +16,13 @@ const ENTITY_USAGE: &str = "Usage: stigctl entity <create|list|delete> [args...]
 /// # Arguments
 /// * `args` - Command arguments (first element is the subcommand)
 /// * `client` - HTTP client for API communication
-pub async fn handle_entity_command(args: &[String], client: &http_utils::StigmergyClient) {
-    dispatch_command!("entity", ENTITY_USAGE, args, client, {
+/// * `output_format` - Output format for get/list commands
+pub async fn handle_entity_command(
+    args: &[String],
+    client: &http_utils::StigmergyClient,
+    output_format: cli_utils::OutputFormat,
+) {
+    dispatch_command!("entity", ENTITY_USAGE, args, client, output_format, {
         "create" => handle_entity_create,
         "list" => handle_entity_list,
         "delete" => handle_entity_delete,
@@ -25,7 +30,11 @@ pub async fn handle_entity_command(args: &[String], client: &http_utils::Stigmer
 }
 
 /// Handles entity creation command.
-async fn handle_entity_create(args: &[String], client: &http_utils::StigmergyClient) {
+async fn handle_entity_create(
+    args: &[String],
+    client: &http_utils::StigmergyClient,
+    _output_format: cli_utils::OutputFormat,
+) {
     validate_args_count_or_exit(args, 1, 1, "create", "Usage: stigctl entity create");
     let request = CreateEntityRequest { entity: None };
 
@@ -39,7 +48,11 @@ async fn handle_entity_create(args: &[String], client: &http_utils::StigmergyCli
 }
 
 /// Handles entity listing command.
-async fn handle_entity_list(args: &[String], client: &http_utils::StigmergyClient) {
+async fn handle_entity_list(
+    args: &[String],
+    client: &http_utils::StigmergyClient,
+    output_format: cli_utils::OutputFormat,
+) {
     validate_args_count_or_exit(args, 1, 1, "list", "Usage: stigctl entity list");
     let entities = http_utils::execute_or_exit(
         || client.get::<Vec<Entity>>("entity"),
@@ -49,6 +62,10 @@ async fn handle_entity_list(args: &[String], client: &http_utils::StigmergyClien
 
     if entities.is_empty() {
         println!("No entities found");
+    } else if output_format == cli_utils::OutputFormat::Json
+        || output_format == cli_utils::OutputFormat::Yaml
+    {
+        cli_utils::print_formatted_or_exit(&entities, output_format, "entities");
     } else {
         println!("Entities:");
         for entity in entities {
@@ -58,7 +75,11 @@ async fn handle_entity_list(args: &[String], client: &http_utils::StigmergyClien
 }
 
 /// Handles entity deletion command.
-async fn handle_entity_delete(args: &[String], client: &http_utils::StigmergyClient) {
+async fn handle_entity_delete(
+    args: &[String],
+    client: &http_utils::StigmergyClient,
+    _output_format: cli_utils::OutputFormat,
+) {
     validate_args_count_or_exit(
         args,
         2,

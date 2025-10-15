@@ -100,7 +100,7 @@ pub fn validate_args_count_or_exit(
 
 /// Macro to generate command dispatcher boilerplate.
 macro_rules! dispatch_command {
-    ($command_name:expr, $usage:expr, $args:expr, $client:expr, {
+    ($command_name:expr, $usage:expr, $args:expr, $client:expr, $output_format:expr, {
         $($subcommand:expr => $handler:expr),* $(,)?
     }) => {
         if $args.is_empty() {
@@ -112,7 +112,7 @@ macro_rules! dispatch_command {
 
         match $args[0].as_str() {
             $(
-                $subcommand => $handler($args, $client).await,
+                $subcommand => $handler($args, $client, $output_format).await,
             )*
             _ => {
                 let available_subcommands = vec![$($subcommand),*];

@@ -18,8 +18,13 @@ const COMPONENT_USAGE: &str = "Usage: stigctl component <create|list|get|update|
 /// # Arguments
 /// * `args` - Command arguments (first element is the subcommand)
 /// * `client` - HTTP client for API communication
-pub async fn handle_component_command(args: &[String], client: &http_utils::StigmergyClient) {
-    dispatch_command!("component", COMPONENT_USAGE, args, client, {
+/// * `output_format` - Output format for get/list commands
+pub async fn handle_component_command(
+    args: &[String],
+    client: &http_utils::StigmergyClient,
+    output_format: cli_utils::OutputFormat,
+) {
+    dispatch_command!("component", COMPONENT_USAGE, args, client, output_format, {
         "create" => handle_component_create,
         "list" => handle_component_list,
         "get" => handle_component_get,
@@ -29,7 +34,11 @@ pub async fn handle_component_command(args: &[String], client: &http_utils::Stig
 }
 
 /// Handles component instance creation.
-async fn handle_component_create(args: &[String], client: &http_utils::StigmergyClient) {
+async fn handle_component_create(
+    args: &[String],
+    client: &http_utils::StigmergyClient,
+    output_format: cli_utils::OutputFormat,
+) {
     validate_args_count_or_exit(
         args,
         4,
@@ -62,11 +71,15 @@ Example: stigctl component create entity:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
     .await;
 
     println!("Created component:");
-    cli_utils::print_json_or_exit(&response, "component");
+    cli_utils::print_formatted_or_exit(&response, output_format, "component");
 }
 
 /// Handles component listing for an entity.
-async fn handle_component_list(args: &[String], client: &http_utils::StigmergyClient) {
+async fn handle_component_list(
+    args: &[String],
+    client: &http_utils::StigmergyClient,
+    output_format: cli_utils::OutputFormat,
+) {
     validate_args_count_or_exit(
         args,
         2,
@@ -84,11 +97,15 @@ async fn handle_component_list(args: &[String], client: &http_utils::StigmergyCl
     )
     .await;
 
-    cli_utils::print_json_or_exit(&components, "components");
+    cli_utils::print_formatted_or_exit(&components, output_format, "components");
 }
 
 /// Handles component retrieval by entity ID and component ID.
-async fn handle_component_get(args: &[String], client: &http_utils::StigmergyClient) {
+async fn handle_component_get(
+    args: &[String],
+    client: &http_utils::StigmergyClient,
+    output_format: cli_utils::OutputFormat,
+) {
     validate_args_count_or_exit(
         args,
         3,
@@ -107,11 +124,15 @@ async fn handle_component_get(args: &[String], client: &http_utils::StigmergyCli
 
     let component = http_utils::execute_or_exit(|| client.get::<Value>(&path), &error_msg).await;
 
-    cli_utils::print_json_or_exit(&component, "component");
+    cli_utils::print_formatted_or_exit(&component, output_format, "component");
 }
 
 /// Handles component update.
-async fn handle_component_update(args: &[String], client: &http_utils::StigmergyClient) {
+async fn handle_component_update(
+    args: &[String],
+    client: &http_utils::StigmergyClient,
+    output_format: cli_utils::OutputFormat,
+) {
     validate_args_count_or_exit(
         args,
         4,
@@ -137,11 +158,15 @@ async fn handle_component_update(args: &[String], client: &http_utils::Stigmergy
         http_utils::execute_or_exit(|| client.put::<Value, Value>(&path, &data), &error_msg).await;
 
     println!("Updated component:");
-    cli_utils::print_json_or_exit(&component, "component");
+    cli_utils::print_formatted_or_exit(&component, output_format, "component");
 }
 
 /// Handles component deletion.
-async fn handle_component_delete(args: &[String], client: &http_utils::StigmergyClient) {
+async fn handle_component_delete(
+    args: &[String],
+    client: &http_utils::StigmergyClient,
+    _output_format: cli_utils::OutputFormat,
+) {
     validate_args_count_or_exit(
         args,
         3,

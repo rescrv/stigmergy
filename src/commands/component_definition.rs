@@ -18,11 +18,13 @@ const COMPONENTDEFINITION_USAGE: &str =
 /// # Arguments
 /// * `args` - Command arguments (first element is the subcommand)
 /// * `client` - HTTP client for API communication
+/// * `output_format` - Output format for get/list commands
 pub async fn handle_componentdefinition_command(
     args: &[String],
     client: &http_utils::StigmergyClient,
+    output_format: cli_utils::OutputFormat,
 ) {
-    dispatch_command!("componentdefinition", COMPONENTDEFINITION_USAGE, args, client, {
+    dispatch_command!("componentdefinition", COMPONENTDEFINITION_USAGE, args, client, output_format, {
         "create" => handle_componentdefinition_create,
         "list" => handle_componentdefinition_list,
         "get" => handle_componentdefinition_get,
@@ -32,7 +34,11 @@ pub async fn handle_componentdefinition_command(
 }
 
 /// Handles component definition creation.
-async fn handle_componentdefinition_create(args: &[String], client: &http_utils::StigmergyClient) {
+async fn handle_componentdefinition_create(
+    args: &[String],
+    client: &http_utils::StigmergyClient,
+    output_format: cli_utils::OutputFormat,
+) {
     validate_args_count_or_exit(
         args,
         3,
@@ -63,11 +69,15 @@ Example: stigctl componentdefinition create MyComponent '{"type":"object","prope
     .await;
 
     println!("Created component definition:");
-    cli_utils::print_json_or_exit(&created_definition, "component definition");
+    cli_utils::print_formatted_or_exit(&created_definition, output_format, "component definition");
 }
 
 /// Handles component definition listing.
-async fn handle_componentdefinition_list(args: &[String], client: &http_utils::StigmergyClient) {
+async fn handle_componentdefinition_list(
+    args: &[String],
+    client: &http_utils::StigmergyClient,
+    output_format: cli_utils::OutputFormat,
+) {
     validate_args_count_or_exit(
         args,
         1,
@@ -82,11 +92,15 @@ async fn handle_componentdefinition_list(args: &[String], client: &http_utils::S
     )
     .await;
 
-    cli_utils::print_json_or_exit(&definitions, "component definitions");
+    cli_utils::print_formatted_or_exit(&definitions, output_format, "component definitions");
 }
 
 /// Handles component definition retrieval by ID.
-async fn handle_componentdefinition_get(args: &[String], client: &http_utils::StigmergyClient) {
+async fn handle_componentdefinition_get(
+    args: &[String],
+    client: &http_utils::StigmergyClient,
+    output_format: cli_utils::OutputFormat,
+) {
     validate_args_count_or_exit(
         args,
         2,
@@ -102,11 +116,15 @@ async fn handle_componentdefinition_get(args: &[String], client: &http_utils::St
     let definition =
         http_utils::execute_or_exit(|| client.get::<ComponentDefinition>(&path), &error_msg).await;
 
-    cli_utils::print_json_or_exit(&definition, "component definition");
+    cli_utils::print_formatted_or_exit(&definition, output_format, "component definition");
 }
 
 /// Handles component definition update.
-async fn handle_componentdefinition_update(args: &[String], client: &http_utils::StigmergyClient) {
+async fn handle_componentdefinition_update(
+    args: &[String],
+    client: &http_utils::StigmergyClient,
+    output_format: cli_utils::OutputFormat,
+) {
     validate_args_count_or_exit(
         args,
         3,
@@ -134,11 +152,15 @@ async fn handle_componentdefinition_update(args: &[String], client: &http_utils:
     .await;
 
     println!("Updated component definition:");
-    cli_utils::print_json_or_exit(&definition, "component definition");
+    cli_utils::print_formatted_or_exit(&definition, output_format, "component definition");
 }
 
 /// Handles component definition deletion.
-async fn handle_componentdefinition_delete(args: &[String], client: &http_utils::StigmergyClient) {
+async fn handle_componentdefinition_delete(
+    args: &[String],
+    client: &http_utils::StigmergyClient,
+    _output_format: cli_utils::OutputFormat,
+) {
     validate_args_count_or_exit(
         args,
         2,

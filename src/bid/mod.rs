@@ -33,6 +33,8 @@ use std::fmt;
 
 mod evaluate;
 
+pub use evaluate::{EntityResolver, EvaluationError};
+
 /// Position information for error reporting
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Position {
