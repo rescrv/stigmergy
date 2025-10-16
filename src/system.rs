@@ -626,6 +626,7 @@ mod tests {
             description: "A test system".to_string(),
             model: "inherit".to_string(),
             color: "blue".to_string(),
+            component: Vec::new(),
             bid: Vec::new(),
             content: "You are a test system.".to_string(),
         }

@@ -206,5 +206,5 @@ pub use system::{
     CreateSystemFromMarkdownRequest, CreateSystemResponse, System, SystemListItem, SystemName,
     SystemNameParseError, create_system_router,
 };
-pub use system_parser::{ParseError, SystemConfig, SystemParser};
+pub use system_parser::{AccessMode, ComponentAccess, ParseError, SystemConfig, SystemParser};
 pub use validate::{ValidationError, validate_value};

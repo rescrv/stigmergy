@@ -49,8 +49,74 @@
 //! ```
 
 use std::collections::HashMap;
+use std::fmt;
+use std::str::FromStr;
 
-use crate::{Bid, BidParseError, BidParser, SystemName};
+use crate::{Bid, BidParseError, BidParser, Component, SystemName};
+
+/// Represents the access mode for a component in a system.
+///
+/// Systems specify which components they can access and how (read, write, execute, or combinations).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum AccessMode {
+    /// Read-only access to the component
+    Read,
+    /// Write-only access to the component
+    Write,
+    /// Execute/Tool access to the component
+    Execute,
+    /// Full read and write access to the component
+    ReadWrite,
+}
+
+impl fmt::Display for AccessMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AccessMode::Read => write!(f, "read"),
+            AccessMode::Write => write!(f, "write"),
+            AccessMode::Execute => write!(f, "execute"),
+            AccessMode::ReadWrite => write!(f, "read+write"),
+        }
+    }
+}
+
+impl FromStr for AccessMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().as_str() {
+            "read" => Ok(AccessMode::Read),
+            "write" => Ok(AccessMode::Write),
+            "execute" | "tool" => Ok(AccessMode::Execute),
+            "read+write" | "readwrite" | "read-write" => Ok(AccessMode::ReadWrite),
+            _ => Err(format!("Invalid access mode: {}", s)),
+        }
+    }
+}
+
+/// Represents a component and its access mode for a system.
+///
+/// This structure defines which component a system can access and how (read, write, or both).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ComponentAccess {
+    /// The component being accessed
+    pub component: Component,
+    /// The access mode (read, write, or read+write)
+    pub access: AccessMode,
+}
+
+impl ComponentAccess {
+    /// Creates a new ComponentAccess with the specified component and access mode.
+    pub fn new(component: Component, access: AccessMode) -> Self {
+        Self { component, access }
+    }
+}
+
+impl fmt::Display for ComponentAccess {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.component.as_str(), self.access)
+    }
+}
 
 /// Custom serde module for serializing/deserializing Vec<Bid> as Vec<String>
 mod bid_serde {
@@ -78,6 +144,52 @@ mod bid_serde {
     }
 }
 
+/// Custom serde module for serializing/deserializing Vec<ComponentAccess> as Vec<String>
+mod component_serde {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::ComponentAccess;
+
+    pub fn serialize<S>(components: &[ComponentAccess], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let strings: Vec<String> = components.iter().map(|c| c.to_string()).collect();
+        strings.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<ComponentAccess>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let strings: Vec<String> = Vec::deserialize(deserializer)?;
+        strings
+            .into_iter()
+            .map(|s| parse_component_access(&s).map_err(serde::de::Error::custom))
+            .collect()
+    }
+
+    fn parse_component_access(s: &str) -> Result<ComponentAccess, String> {
+        use super::AccessMode;
+        use crate::Component;
+        use std::str::FromStr;
+
+        let s = s.trim();
+        if let Some(colon_pos) = s.find(':') {
+            let component_str = s[..colon_pos].trim();
+            let access_str = s[colon_pos + 1..].trim();
+            let component = Component::new(component_str)
+                .ok_or_else(|| format!("Invalid component name: {}", component_str))?;
+            let access = AccessMode::from_str(access_str)?;
+            Ok(ComponentAccess::new(component, access))
+        } else {
+            let component =
+                Component::new(s).ok_or_else(|| format!("Invalid component name: {}", s))?;
+            Ok(ComponentAccess::new(component, AccessMode::ReadWrite))
+        }
+    }
+}
+
 /// A parsed system configuration containing metadata and content.
 ///
 /// This structure represents a complete system configuration file,
@@ -91,6 +203,7 @@ mod bid_serde {
 /// - `description`: Human-readable description (required)
 /// - `model`: Model specification (required)
 /// - `color`: UI color identifier (required)
+/// - `component`: List of component access specifications (optional)
 /// - `bid`: List of bid expressions (optional, parsed from bullet list format)
 /// - `content`: Markdown content after frontmatter
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -103,6 +216,9 @@ pub struct SystemConfig {
     pub model: String,
     /// The color theme for the system (required field)
     pub color: String,
+    /// List of component access specifications (optional field)
+    #[serde(with = "component_serde")]
+    pub component: Vec<ComponentAccess>,
     /// List of bid expressions (optional field, parsed from bullet list format)
     #[serde(with = "bid_serde")]
     pub bid: Vec<Bid>,
@@ -124,6 +240,8 @@ pub enum ParseError {
     ValidationError(String),
     /// A bid expression failed to parse
     BidParseError(String, BidParseError),
+    /// A component access expression failed to parse
+    ComponentParseError(String, String),
 }
 
 impl std::fmt::Display for ParseError {
@@ -139,6 +257,13 @@ impl std::fmt::Display for ParseError {
                     f,
                     "Failed to parse bid expression '{}': {}",
                     bid_str, bid_err
+                )
+            }
+            ParseError::ComponentParseError(component_str, err) => {
+                write!(
+                    f,
+                    "Failed to parse component access '{}': {}",
+                    component_str, err
                 )
             }
         }
@@ -163,7 +288,7 @@ impl SystemConfig {
     /// - Color: Basic color name or hex format (#RRGGBB)
     /// - Model: Non-empty string
     /// - Content: Maximum 10KB
-    /// - Tools: Each tool name 1-50 characters, non-empty
+    /// - Component: Maximum 100 component access expressions
     /// - Bid: Maximum 100 bid expressions
     pub fn validate(&self) -> Result<(), ParseError> {
         // Validate name length (1-100 characters)
@@ -228,6 +353,13 @@ impl SystemConfig {
         if self.bid.len() > 100 {
             return Err(ParseError::ValidationError(
                 "Cannot have more than 100 bid expressions".to_string(),
+            ));
+        }
+
+        // Validate component access expressions (reasonable limit on count)
+        if self.component.len() > 100 {
+            return Err(ParseError::ValidationError(
+                "Cannot have more than 100 component access expressions".to_string(),
             ));
         }
 
@@ -319,6 +451,7 @@ impl SystemParser {
             description: Self::get_required_field(&header_data, "description")?,
             model: Self::get_required_field(&header_data, "model")?,
             color: Self::get_required_field(&header_data, "color")?,
+            component: Self::parse_component(&header_data)?,
             bid: Self::parse_bid(&header_data)?,
             content: markdown_content.trim().to_string(),
         };
@@ -457,6 +590,70 @@ impl SystemParser {
             Ok(Vec::new())
         }
     }
+
+    fn parse_component(data: &HashMap<String, String>) -> Result<Vec<ComponentAccess>, ParseError> {
+        // component field is optional
+        if let Some(component_str) = data.get("component") {
+            if component_str.trim().is_empty() {
+                return Ok(Vec::new());
+            }
+
+            let mut components = Vec::new();
+            for line in component_str.lines() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+
+                // Extract the component expression from the bullet point
+                // Handle various bullet formats: "- expr", "  - expr", etc.
+                let component_expr = if let Some(stripped) = line.strip_prefix('-') {
+                    stripped.trim()
+                } else if let Some(dash_pos) = line.find('-') {
+                    // Handle whitespace-prefixed bullets
+                    line[dash_pos + 1..].trim()
+                } else {
+                    // No bullet found, treat the whole line as a component expression
+                    line
+                };
+
+                if !component_expr.is_empty() {
+                    // Parse component access: "ComponentName: access_mode" or just "ComponentName"
+                    let component_access = if let Some(colon_pos) = component_expr.find(':') {
+                        let component_name = component_expr[..colon_pos].trim();
+                        let access_str = component_expr[colon_pos + 1..].trim();
+
+                        let component = Component::new(component_name).ok_or_else(|| {
+                            ParseError::ComponentParseError(
+                                component_expr.to_string(),
+                                format!("Invalid component name: {}", component_name),
+                            )
+                        })?;
+
+                        let access = AccessMode::from_str(access_str).map_err(|err| {
+                            ParseError::ComponentParseError(component_expr.to_string(), err)
+                        })?;
+
+                        ComponentAccess::new(component, access)
+                    } else {
+                        // No access mode specified, default to ReadWrite
+                        let component = Component::new(component_expr).ok_or_else(|| {
+                            ParseError::ComponentParseError(
+                                component_expr.to_string(),
+                                format!("Invalid component name: {}", component_expr),
+                            )
+                        })?;
+                        ComponentAccess::new(component, AccessMode::ReadWrite)
+                    };
+
+                    components.push(component_access);
+                }
+            }
+            Ok(components)
+        } else {
+            Ok(Vec::new())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -484,7 +681,8 @@ You are the DRY Principal, an expert code architect.
         );
         assert_eq!(config.model, "inherit");
         assert_eq!(config.color, "purple");
-        assert_eq!(config.bid, Vec::<Bid>::new()); // No bid field in test content, so empty
+        assert_eq!(config.component, Vec::<ComponentAccess>::new());
+        assert_eq!(config.bid, Vec::<Bid>::new());
         assert_eq!(
             config.content,
             "You are the DRY Principal, an expert code architect."
@@ -507,6 +705,245 @@ Content here
 "#;
         let result = SystemParser::parse(content);
         assert!(matches!(result, Err(ParseError::MissingRequiredField(_))));
+    }
+
+    #[test]
+    fn parse_system_config_with_component() {
+        let content = r#"---
+name: example-system
+description: A system with component access
+model: inherit
+color: blue
+component:
+- Position: read
+- Velocity: write
+- Health: read+write
+- Inventory: execute
+---
+
+System content with components.
+"#;
+
+        let config = SystemParser::parse(content).unwrap();
+
+        assert_eq!(config.name, SystemName::new("example-system").unwrap());
+        assert_eq!(config.component.len(), 4);
+
+        assert_eq!(config.component[0].component.as_str(), "Position");
+        assert_eq!(config.component[0].access, AccessMode::Read);
+
+        assert_eq!(config.component[1].component.as_str(), "Velocity");
+        assert_eq!(config.component[1].access, AccessMode::Write);
+
+        assert_eq!(config.component[2].component.as_str(), "Health");
+        assert_eq!(config.component[2].access, AccessMode::ReadWrite);
+
+        assert_eq!(config.component[3].component.as_str(), "Inventory");
+        assert_eq!(config.component[3].access, AccessMode::Execute);
+    }
+
+    #[test]
+    fn parse_system_config_with_component_default_access() {
+        let content = r#"---
+name: test-system
+description: Components with default access mode
+model: inherit
+color: green
+component:
+- Position
+- Velocity
+---
+
+Default access mode test.
+"#;
+
+        let config = SystemParser::parse(content).unwrap();
+        assert_eq!(config.component.len(), 2);
+
+        assert_eq!(config.component[0].component.as_str(), "Position");
+        assert_eq!(config.component[0].access, AccessMode::ReadWrite);
+
+        assert_eq!(config.component[1].component.as_str(), "Velocity");
+        assert_eq!(config.component[1].access, AccessMode::ReadWrite);
+    }
+
+    #[test]
+    fn parse_system_config_no_component_field() {
+        let content = r#"---
+name: no-component
+description: System without component field
+model: inherit
+color: yellow
+---
+
+Content here.
+"#;
+
+        let config = SystemParser::parse(content).unwrap();
+        assert_eq!(config.component.len(), 0);
+    }
+
+    #[test]
+    fn parse_system_config_empty_component() {
+        let content = r#"---
+name: empty-component
+description: System with empty component section
+model: inherit
+color: red
+component:
+---
+
+Content here.
+"#;
+
+        let config = SystemParser::parse(content).unwrap();
+        assert_eq!(config.component.len(), 0);
+    }
+
+    #[test]
+    fn invalid_component_name() {
+        let content = r#"---
+name: invalid-component
+description: System with invalid component name
+model: inherit
+color: blue
+component:
+- 123Invalid: read
+---
+
+Content.
+"#;
+
+        let result = SystemParser::parse(content);
+        assert!(matches!(result, Err(ParseError::ComponentParseError(_, _))));
+    }
+
+    #[test]
+    fn invalid_access_mode() {
+        let content = r#"---
+name: invalid-access
+description: System with invalid access mode
+model: inherit
+color: blue
+component:
+- Position: invalid_mode
+---
+
+Content.
+"#;
+
+        let result = SystemParser::parse(content);
+        assert!(matches!(result, Err(ParseError::ComponentParseError(_, _))));
+    }
+
+    #[test]
+    fn component_access_with_whitespace() {
+        let content = r#"---
+name: whitespace-test
+description: Testing whitespace handling in components
+model: inherit
+color: blue
+component:
+- Position: read
+  - Velocity:   write
+    -   Health   :   read+write
+   -Inventory:execute
+---
+
+Content.
+"#;
+
+        let config = SystemParser::parse(content).unwrap();
+        assert_eq!(config.component.len(), 4);
+
+        assert_eq!(config.component[0].access, AccessMode::Read);
+        assert_eq!(config.component[1].access, AccessMode::Write);
+        assert_eq!(config.component[2].access, AccessMode::ReadWrite);
+        assert_eq!(config.component[3].access, AccessMode::Execute);
+    }
+
+    #[test]
+    fn component_validation_too_many() {
+        let content = format!(
+            r#"---
+name: too-many-components
+description: System with too many components
+model: inherit
+color: blue
+component:
+{}
+---
+
+Content.
+"#,
+            (0..101)
+                .map(|i| format!("- Component{}: read", i))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+
+        let result = SystemParser::parse(&content);
+        assert!(matches!(result, Err(ParseError::ValidationError(_))));
+    }
+
+    #[test]
+    fn component_access_mode_variations() {
+        let content = r#"---
+name: access-modes
+description: Different access mode string variations
+model: inherit
+color: purple
+component:
+- Comp1: read
+- Comp2: write
+- Comp3: execute
+- Comp4: tool
+- Comp5: read+write
+- Comp6: readwrite
+- Comp7: read-write
+---
+
+Content.
+"#;
+
+        let config = SystemParser::parse(content).unwrap();
+        assert_eq!(config.component.len(), 7);
+
+        assert_eq!(config.component[0].access, AccessMode::Read);
+        assert_eq!(config.component[1].access, AccessMode::Write);
+        assert_eq!(config.component[2].access, AccessMode::Execute);
+        assert_eq!(config.component[3].access, AccessMode::Execute);
+        assert_eq!(config.component[4].access, AccessMode::ReadWrite);
+        assert_eq!(config.component[5].access, AccessMode::ReadWrite);
+        assert_eq!(config.component[6].access, AccessMode::ReadWrite);
+    }
+
+    #[test]
+    fn component_with_module_path() {
+        let content = r#"---
+name: module-path
+description: Components with module paths
+model: inherit
+color: orange
+component:
+- ghai::Issue: read
+- std::collections::HashMap: write
+---
+
+Content.
+"#;
+
+        let config = SystemParser::parse(content).unwrap();
+        assert_eq!(config.component.len(), 2);
+
+        assert_eq!(config.component[0].component.as_str(), "ghai::Issue");
+        assert_eq!(config.component[0].access, AccessMode::Read);
+
+        assert_eq!(
+            config.component[1].component.as_str(),
+            "std::collections::HashMap"
+        );
+        assert_eq!(config.component[1].access, AccessMode::Write);
     }
 
     #[test]
@@ -1294,6 +1731,9 @@ name: integration-test
 description: Bid integration with all other SystemConfig fields
 model: gpt-4
 color: #FF5733
+component:
+- Position: read
+- Velocity: write
 bid:
 - ON system.complexity > threshold BID computational_cost
 - ON tools.count >= 5 BID multi_tool_bonus
@@ -1305,6 +1745,7 @@ This system demonstrates bid integration with:
 - Custom model specification
 - Hex color code
 - Rich markdown content
+- Component access specifications
 
 The bids should work alongside all other configuration.
 "#;
@@ -1315,6 +1756,7 @@ The bids should work alongside all other configuration.
         assert_eq!(config.name, SystemName::new("integration-test").unwrap());
         assert_eq!(config.model, "gpt-4");
         assert_eq!(config.color, "#FF5733");
+        assert_eq!(config.component.len(), 2);
         assert_eq!(config.bid.len(), 3);
         assert!(config.content.contains("This system demonstrates"));
 
@@ -1382,6 +1824,9 @@ name: test-system
 description: A test system configuration
 model: inherit
 color: blue
+component:
+  - Position: read
+  - Velocity: write
 bid:
   - ON true BID 100
   - ON score > 50 BID score * 2
@@ -1395,6 +1840,7 @@ content: |
         assert_eq!(config.description, "A test system configuration");
         assert_eq!(config.model, "inherit");
         assert_eq!(config.color, "blue");
+        assert_eq!(config.component.len(), 2);
         assert_eq!(config.bid.len(), 2);
         assert!(config.content.contains("This is the system content"));
     }
@@ -1406,6 +1852,7 @@ content: |
             description: "Testing roundtrip".to_string(),
             model: "inherit".to_string(),
             color: "green".to_string(),
+            component: vec![],
             bid: vec![],
             content: "Test content".to_string(),
         };
@@ -1417,6 +1864,7 @@ content: |
         assert_eq!(original.description, deserialized.description);
         assert_eq!(original.model, deserialized.model);
         assert_eq!(original.color, deserialized.color);
+        assert_eq!(original.component, deserialized.component);
         assert_eq!(original.bid, deserialized.bid);
         assert_eq!(original.content, deserialized.content);
     }

@@ -45,6 +45,7 @@ pub struct SystemRecord {
 ///     description: "Test system".to_string(),
 ///     model: "inherit".to_string(),
 ///     color: "blue".to_string(),
+///     component: Vec::new(),
 ///     bid: Vec::new(),
 ///     content: "You are a test system.".to_string(),
 /// };
@@ -135,6 +136,7 @@ pub async fn get(
                 description: row.description.unwrap_or_default(),
                 model: row.model,
                 color: row.color.unwrap_or_default(),
+                component: Vec::new(),
                 bid: bids,
                 content: row.content.unwrap_or_default(),
             };
@@ -294,6 +296,7 @@ pub async fn list(tx: &mut Transaction<'_, Postgres>) -> SqlResult<Vec<System>> 
                     description: row.description.unwrap_or_default(),
                     model: row.model,
                     color: row.color.unwrap_or_default(),
+                    component: Vec::new(),
                     bid: bids,
                     content: row.content.unwrap_or_default(),
                 };
@@ -325,6 +328,7 @@ mod tests {
             description: format!("Test system for {}", test_name),
             model: "inherit".to_string(),
             color: "blue".to_string(),
+            component: Vec::new(),
             bid: Vec::new(),
             content: "You are a test system.".to_string(),
         };
