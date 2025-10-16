@@ -43,7 +43,6 @@ pub struct SystemRecord {
 /// let config = SystemConfig {
 ///     name: SystemName::new("test-system").unwrap(),
 ///     description: "Test system".to_string(),
-///     tools: vec!["Read".to_string(), "Write".to_string()],
 ///     model: "inherit".to_string(),
 ///     color: "blue".to_string(),
 ///     bid: Vec::new(),

@@ -249,7 +249,6 @@ impl SystemConfig {
 /// let content = r#"---
 /// name: example
 /// description: Example configuration
-/// tools: Tool1, Tool2
 /// model: gpt-4
 /// color: blue
 /// ---
@@ -260,7 +259,6 @@ impl SystemConfig {
 ///
 /// let config = SystemParser::parse(content).unwrap();
 /// assert_eq!(config.name, stigmergy::SystemName::new("example").unwrap());
-/// assert_eq!(config.tools, vec!["Tool1", "Tool2"]);
 /// ```
 pub struct SystemParser;
 
