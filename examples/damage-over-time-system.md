@@ -9,7 +9,7 @@ component:
 - BurnEffect: read
 - StatusEffects: read
 bid:
-- ON (PoisonEffect.present || BurnEffect.present) && Health.current > 0 BID 80
+- ON (PoisonEffect || BurnEffect) && Health.current > 0 BID 80
 ---
 
 # Damage Over Time System

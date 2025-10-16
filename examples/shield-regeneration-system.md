@@ -7,7 +7,7 @@ component:
 - Shield: read+write
 - CombatState: read
 bid:
-- ON Shield.present && Shield.current < Shield.maximum && CombatState.time_since_damage > 3.0 BID 90
+- ON Shield && Shield.current < Shield.maximum && CombatState.time_since_damage > 3.0 BID 90
 ---
 
 # Shield Regeneration System

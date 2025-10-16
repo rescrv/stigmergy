@@ -7,7 +7,7 @@ component:
 - Health: read+write
 - MagicAnnotation: read+write
 bid:
-- ON MagicAnnotation.present && Health.current < 10 BID 100
+- ON MagicAnnotation && Health.current < 10 BID 100
 ---
 
 # Resurrection System
@@ -39,7 +39,7 @@ The MagicAnnotation component is consumed during this process and should be remo
 If a being has:
 - Health.maximum = 100
 - Health.current = 3
-- MagicAnnotation.present = true
+- MagicAnnotation = true
 
 You should:
 1. Read Health.maximum (100)

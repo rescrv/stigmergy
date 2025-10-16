@@ -8,7 +8,7 @@ component:
 - Health: read+write
 - Metabolism: read
 bid:
-- ON Hunger.present && Hunger.current < 10 BID 95
+- ON Hunger && Hunger.current < 10 BID 95
 ---
 
 # Hunger System

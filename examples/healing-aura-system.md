@@ -8,7 +8,7 @@ component:
 - Position: read
 - Healer: read
 bid:
-- ON Healer.present && Health.current < Health.maximum BID Healer.power * 10
+- ON Healer && Health.current < Health.maximum BID Healer.power * 10
 ---
 
 # Healing Aura System
