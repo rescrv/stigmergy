@@ -2,7 +2,7 @@
 name: shield-regeneration-system
 description: Regenerates energy shields when not recently damaged
 model: inherit
-color: cyan
+color: blue
 component:
 - Shield: read+write
 - CombatState: read
