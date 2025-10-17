@@ -447,7 +447,7 @@ fn process_invariant_directory(
                     None
                 };
 
-                operations.push(Operation::CreateInvariant {
+                operations.push(Operation::UpsertInvariant {
                     invariant_id,
                     asserts: inv_yaml.asserts,
                 });
@@ -464,7 +464,7 @@ fn process_invariant_directory(
                     None
                 };
 
-                operations.push(Operation::CreateInvariant {
+                operations.push(Operation::UpsertInvariant {
                     invariant_id,
                     asserts: inv_yaml.asserts,
                 });
@@ -552,6 +552,7 @@ fn print_apply_results(response: &ApplyResponse) {
     let mut updated_components = 0;
     let mut created_components = 0;
     let mut created_invariants = 0;
+    let mut updated_invariants = 0;
     let mut errors = 0;
 
     for result in &response.results {
@@ -575,8 +576,12 @@ fn print_apply_results(response: &ApplyResponse) {
                     updated_components += 1;
                 }
             }
-            OperationResult::CreateInvariant { .. } => {
-                created_invariants += 1;
+            OperationResult::UpsertInvariant { created, .. } => {
+                if *created {
+                    created_invariants += 1;
+                } else {
+                    updated_invariants += 1;
+                }
             }
             OperationResult::Error { .. } => {
                 errors += 1;
@@ -609,6 +614,9 @@ fn print_apply_results(response: &ApplyResponse) {
     }
     if created_invariants > 0 {
         println!("  ✓ Created {} invariants", created_invariants);
+    }
+    if updated_invariants > 0 {
+        println!("  ✓ Updated {} invariants", updated_invariants);
     }
     if errors > 0 {
         println!("  ✗ {} errors occurred", errors);
