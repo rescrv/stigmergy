@@ -11,7 +11,7 @@
 //! ## Directory Structure
 //!
 //! The apply command expects the following directory structure:
-//! ```
+//! ```text
 //! foo/
 //! ├── entity/               # Entity definitions (YAML)
 //! ├── component_definition/ # Component definition schemas (YAML)
@@ -30,10 +30,10 @@
 //! - Invariant creation/deletion
 
 use crate::{
+    Component, ComponentDefinition, Entity, InvariantID,
     apply::{ApplyRequest, ApplyResponse, Operation, OperationResult},
     cli_utils,
     http_utils::StigmergyClient,
-    Component, ComponentDefinition, Entity, InvariantID,
 };
 use serde::Deserialize;
 use serde_json;
