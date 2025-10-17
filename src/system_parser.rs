@@ -146,7 +146,8 @@ mod bid_serde {
 
 /// Custom serde module for serializing/deserializing Vec<ComponentAccess> as Vec<String>
 mod component_serde {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use serde::de::{SeqAccess, Visitor};
+    use serde::{Deserializer, Serialize, Serializer};
 
     use super::ComponentAccess;
 
@@ -162,11 +163,70 @@ mod component_serde {
     where
         D: Deserializer<'de>,
     {
-        let strings: Vec<String> = Vec::deserialize(deserializer)?;
-        strings
-            .into_iter()
-            .map(|s| parse_component_access(&s).map_err(serde::de::Error::custom))
-            .collect()
+        struct ComponentAccessVisitor;
+
+        impl<'de> Visitor<'de> for ComponentAccessVisitor {
+            type Value = Vec<ComponentAccess>;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a sequence of component access specifications")
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut components = Vec::new();
+
+                while let Some(value) = seq.next_element::<serde_yml::Value>()? {
+                    match value {
+                        serde_yml::Value::String(s) => {
+                            components.push(
+                                parse_component_access(&s).map_err(serde::de::Error::custom)?,
+                            );
+                        }
+                        serde_yml::Value::Mapping(map) => {
+                            if map.len() != 1 {
+                                return Err(serde::de::Error::custom(
+                                    "Component map must have exactly one entry",
+                                ));
+                            }
+
+                            let (key, value) = map.iter().next().unwrap();
+
+                            let component_name = key
+                                .as_str()
+                                .ok_or_else(|| {
+                                    serde::de::Error::custom("Component name must be a string")
+                                })?
+                                .to_string();
+
+                            let access_str = value
+                                .as_str()
+                                .ok_or_else(|| {
+                                    serde::de::Error::custom("Access mode must be a string")
+                                })?
+                                .to_string();
+
+                            let component_str = format!("{}: {}", component_name, access_str);
+                            components.push(
+                                parse_component_access(&component_str)
+                                    .map_err(serde::de::Error::custom)?,
+                            );
+                        }
+                        _ => {
+                            return Err(serde::de::Error::custom(
+                                "Component must be a string or a map",
+                            ));
+                        }
+                    }
+                }
+
+                Ok(components)
+            }
+        }
+
+        deserializer.deserialize_seq(ComponentAccessVisitor)
     }
 
     fn parse_component_access(s: &str) -> Result<ComponentAccess, String> {
@@ -175,7 +235,22 @@ mod component_serde {
         use std::str::FromStr;
 
         let s = s.trim();
-        if let Some(colon_pos) = s.find(':') {
+
+        // Find the position of the colon that separates component name from access mode
+        // We need to be careful with :: in module paths like std::collections::HashMap
+        let colon_pos = s.char_indices().rev().find_map(|(i, c)| {
+            if c == ':' {
+                // Check if this is part of :: by looking at adjacent characters
+                let is_double_colon = (i > 0 && s.as_bytes()[i - 1] == b':')
+                    || (i + 1 < s.len() && s.as_bytes()[i + 1] == b':');
+
+                if is_double_colon { None } else { Some(i) }
+            } else {
+                None
+            }
+        });
+
+        if let Some(colon_pos) = colon_pos {
             let component_str = s[..colon_pos].trim();
             let access_str = s[colon_pos + 1..].trim();
             let component = Component::new(component_str)
@@ -503,33 +578,33 @@ impl SystemParser {
                 let key = line[..colon_pos].trim().to_string();
                 let mut value = line[colon_pos + 1..].trim().to_string();
 
-                // Handle multi-line bid field specially
-                if key == "bid" && value.is_empty() {
+                // Handle multi-line bid and component fields specially
+                if (key == "bid" || key == "component") && value.is_empty() {
                     // Collect all the bullet list lines that follow
                     i += 1;
-                    let mut bid_lines = Vec::new();
+                    let mut field_lines = Vec::new();
                     while i < lines.len() {
-                        let bid_line = lines[i].trim();
-                        if bid_line.is_empty() {
+                        let field_line = lines[i].trim();
+                        if field_line.is_empty() {
                             i += 1;
                             continue;
                         }
                         // Check if this looks like a bullet point (with optional whitespace before -)
-                        if bid_line.starts_with('-')
-                            || (bid_line.len() > 1 && bid_line.trim_start().starts_with('-'))
+                        if field_line.starts_with('-')
+                            || (field_line.len() > 1 && field_line.trim_start().starts_with('-'))
                         {
-                            bid_lines.push(bid_line.to_string());
+                            field_lines.push(field_line.to_string());
                             i += 1;
-                        } else if bid_line.contains(':') {
+                        } else if field_line.contains(':') {
                             // This is likely the start of the next field
                             break;
                         } else {
-                            // Continue collecting lines that might be part of the multi-line bid
-                            bid_lines.push(bid_line.to_string());
+                            // Continue collecting lines that might be part of the multi-line field
+                            field_lines.push(field_line.to_string());
                             i += 1;
                         }
                     }
-                    value = bid_lines.join("\n");
+                    value = field_lines.join("\n");
                     i -= 1; // Back up one so we don't skip the next field
                 }
 
@@ -591,6 +666,49 @@ impl SystemParser {
         }
     }
 
+    fn parse_single_component(component_expr: &str) -> Result<ComponentAccess, ParseError> {
+        // Find the position of the colon that separates component name from access mode
+        // We need to be careful with :: in module paths like std::collections::HashMap
+        // Strategy: find the last colon that's either followed by whitespace or is at a word boundary
+        let colon_pos = component_expr.char_indices().rev().find_map(|(i, c)| {
+            if c == ':' {
+                // Check if this is part of :: by looking at adjacent characters
+                let is_double_colon = (i > 0 && component_expr.as_bytes()[i - 1] == b':')
+                    || (i + 1 < component_expr.len() && component_expr.as_bytes()[i + 1] == b':');
+
+                if is_double_colon { None } else { Some(i) }
+            } else {
+                None
+            }
+        });
+
+        if let Some(colon_pos) = colon_pos {
+            let component_name = component_expr[..colon_pos].trim();
+            let access_str = component_expr[colon_pos + 1..].trim();
+
+            let component = Component::new(component_name).ok_or_else(|| {
+                ParseError::ComponentParseError(
+                    component_expr.to_string(),
+                    format!("Invalid component name: {}", component_name),
+                )
+            })?;
+
+            let access = AccessMode::from_str(access_str)
+                .map_err(|err| ParseError::ComponentParseError(component_expr.to_string(), err))?;
+
+            Ok(ComponentAccess::new(component, access))
+        } else {
+            // No access mode specified, default to ReadWrite
+            let component = Component::new(component_expr).ok_or_else(|| {
+                ParseError::ComponentParseError(
+                    component_expr.to_string(),
+                    format!("Invalid component name: {}", component_expr),
+                )
+            })?;
+            Ok(ComponentAccess::new(component, AccessMode::ReadWrite))
+        }
+    }
+
     fn parse_component(data: &HashMap<String, String>) -> Result<Vec<ComponentAccess>, ParseError> {
         // component field is optional
         if let Some(component_str) = data.get("component") {
@@ -619,33 +737,9 @@ impl SystemParser {
 
                 if !component_expr.is_empty() {
                     // Parse component access: "ComponentName: access_mode" or just "ComponentName"
-                    let component_access = if let Some(colon_pos) = component_expr.find(':') {
-                        let component_name = component_expr[..colon_pos].trim();
-                        let access_str = component_expr[colon_pos + 1..].trim();
-
-                        let component = Component::new(component_name).ok_or_else(|| {
-                            ParseError::ComponentParseError(
-                                component_expr.to_string(),
-                                format!("Invalid component name: {}", component_name),
-                            )
-                        })?;
-
-                        let access = AccessMode::from_str(access_str).map_err(|err| {
-                            ParseError::ComponentParseError(component_expr.to_string(), err)
-                        })?;
-
-                        ComponentAccess::new(component, access)
-                    } else {
-                        // No access mode specified, default to ReadWrite
-                        let component = Component::new(component_expr).ok_or_else(|| {
-                            ParseError::ComponentParseError(
-                                component_expr.to_string(),
-                                format!("Invalid component name: {}", component_expr),
-                            )
-                        })?;
-                        ComponentAccess::new(component, AccessMode::ReadWrite)
-                    };
-
+                    // Component names can contain :: (like std::collections::HashMap)
+                    // We look for the last single colon that's not part of ::
+                    let component_access = Self::parse_single_component(component_expr)?;
                     components.push(component_access);
                 }
             }

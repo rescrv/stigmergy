@@ -5,11 +5,14 @@ members = [".", "derive"]
 name = "stigmergy"
 version = "0.1.0"
 edition = "2024"
+description = "stigmergy provides emergent agent behavior"
+license = "Apache-2.0"
+repository = "https://github.com/rescrv/stigmergy"
 
 [dependencies]
 arrrg = "0.8.0"
 arrrg_derive = "0.8.0"
-stigmergy-derive = { path = "derive" }
+stigmergy-derive = { path = "derive", version = "0.1.0" }
 axum = "0.7"
 getopts = "0.2"
 one_two_eight = "0.10.0"
