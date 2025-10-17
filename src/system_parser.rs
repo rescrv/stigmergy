@@ -241,13 +241,10 @@ mod component_serde {
         let colon_pos = s.char_indices().rev().find_map(|(i, c)| {
             if c == ':' {
                 // Check if this is part of :: by looking at adjacent characters
-                if i > 0 && s.as_bytes()[i - 1] == b':' {
-                    None
-                } else if i + 1 < s.len() && s.as_bytes()[i + 1] == b':' {
-                    None
-                } else {
-                    Some(i)
-                }
+                let is_double_colon = (i > 0 && s.as_bytes()[i - 1] == b':')
+                    || (i + 1 < s.len() && s.as_bytes()[i + 1] == b':');
+
+                if is_double_colon { None } else { Some(i) }
             } else {
                 None
             }
@@ -675,14 +672,11 @@ impl SystemParser {
         // Strategy: find the last colon that's either followed by whitespace or is at a word boundary
         let colon_pos = component_expr.char_indices().rev().find_map(|(i, c)| {
             if c == ':' {
-                // Check if this is part of :: by looking at the previous character
-                if i > 0 && component_expr.as_bytes()[i - 1] == b':' {
-                    None
-                } else if i + 1 < component_expr.len() && component_expr.as_bytes()[i + 1] == b':' {
-                    None
-                } else {
-                    Some(i)
-                }
+                // Check if this is part of :: by looking at adjacent characters
+                let is_double_colon = (i > 0 && component_expr.as_bytes()[i - 1] == b':')
+                    || (i + 1 < component_expr.len() && component_expr.as_bytes()[i + 1] == b':');
+
+                if is_double_colon { None } else { Some(i) }
             } else {
                 None
             }
