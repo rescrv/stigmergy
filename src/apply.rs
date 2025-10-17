@@ -54,9 +54,9 @@ pub enum Operation {
         /// Component type to delete definition for.
         component: Component,
     },
-    /// Creates an invariant.
-    CreateInvariant {
-        /// Optional invariant ID. If None, a random one will be generated.
+    /// Creates or updates an invariant.
+    UpsertInvariant {
+        /// Invariant ID. If None, a random one will be generated.
         #[serde(skip_serializing_if = "Option::is_none")]
         invariant_id: Option<InvariantID>,
         /// The assertion expression.
@@ -126,12 +126,14 @@ pub enum OperationResult {
         /// True if definition was deleted, false if it didn't exist.
         deleted: bool,
     },
-    /// Invariant creation result.
-    CreateInvariant {
-        /// The invariant ID that was created.
+    /// Invariant upsert result.
+    UpsertInvariant {
+        /// The invariant ID.
         invariant_id: InvariantID,
         /// The assertion expression.
         asserts: String,
+        /// True if invariant was created, false if it was updated.
+        created: bool,
     },
     /// Invariant deletion result.
     DeleteInvariant {
@@ -317,7 +319,7 @@ async fn apply_operations(
                     },
                 }
             }
-            Operation::CreateInvariant {
+            Operation::UpsertInvariant {
                 invariant_id,
                 asserts,
             } => {
@@ -325,14 +327,15 @@ async fn apply_operations(
                     InvariantID::random_url_safe().expect("failed to generate random invariant")
                 });
 
-                match crate::sql::invariants::create(&mut tx, &invariant_id, asserts).await {
-                    Ok(_) => OperationResult::CreateInvariant {
+                match crate::sql::invariants::upsert(&mut tx, &invariant_id, asserts).await {
+                    Ok(created) => OperationResult::UpsertInvariant {
                         invariant_id,
                         asserts: asserts.clone(),
+                        created,
                     },
                     Err(e) => OperationResult::Error {
                         operation_index: idx,
-                        error: format!("failed to create invariant: {}", e),
+                        error: format!("failed to upsert invariant: {}", e),
                     },
                 }
             }

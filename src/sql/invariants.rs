@@ -168,6 +168,50 @@ pub async fn update(
     }
 }
 
+/// Creates or updates an invariant in the database.
+///
+/// If the invariant already exists, updates its assertion expression.
+/// If it doesn't exist, creates it.
+///
+/// # Arguments
+/// * `tx` - PostgreSQL transaction
+/// * `invariant_id` - The invariant identifier to create or update
+/// * `asserts` - The assertion expression as a string
+///
+/// # Returns
+/// * `Ok(true)` - Invariant was created
+/// * `Ok(false)` - Invariant already existed and was updated
+/// * `Err(DataStoreError::Internal)` - Database error
+///
+/// # Examples
+/// ```no_run
+/// # use stigmergy::{InvariantID, sql};
+/// # use sqlx::PgPool;
+/// # async fn example(pool: PgPool) -> Result<(), Box<dyn std::error::Error>> {
+/// let invariant_id = InvariantID::new([1u8; 32]);
+/// let mut tx = pool.begin().await?;
+/// let created = sql::invariants::upsert(&mut tx, &invariant_id, "x > 0 && y < 100").await?;
+/// tx.commit().await?;
+/// # Ok(())
+/// # }
+/// ```
+pub async fn upsert(
+    tx: &mut Transaction<'_, Postgres>,
+    invariant_id: &InvariantID,
+    asserts: &str,
+) -> SqlResult<bool> {
+    match get(tx, invariant_id).await? {
+        Some(_) => {
+            update(tx, invariant_id, asserts).await?;
+            Ok(false)
+        }
+        None => {
+            create(tx, invariant_id, asserts).await?;
+            Ok(true)
+        }
+    }
+}
+
 /// Deletes an invariant from the database.
 ///
 /// # Arguments
@@ -386,6 +430,54 @@ mod tests {
         let deleted = delete(&mut tx, &invariant_id).await.unwrap();
         tx.commit().await.unwrap();
         assert!(!deleted);
+    }
+
+    #[tokio::test]
+    async fn upsert_creates_new() {
+        let pool = super::super::tests::setup_test_db().await;
+        let invariant_id = unique_invariant("upsert_creates_new");
+        let asserts = "x > 0 && y < 100";
+
+        let mut tx = pool.begin().await.unwrap();
+        let created = upsert(&mut tx, &invariant_id, asserts).await.unwrap();
+        tx.commit().await.unwrap();
+        assert!(created);
+
+        let mut tx = pool.begin().await.unwrap();
+        let record = get(&mut tx, &invariant_id).await.unwrap();
+        tx.commit().await.unwrap();
+        assert!(record.is_some());
+        let record = record.unwrap();
+        assert_eq!(record.asserts, asserts);
+    }
+
+    #[tokio::test]
+    async fn upsert_updates_existing() {
+        let pool = super::super::tests::setup_test_db().await;
+        let invariant_id = unique_invariant("upsert_updates_existing");
+
+        let mut tx = pool.begin().await.unwrap();
+        create(&mut tx, &invariant_id, "x > 0").await.unwrap();
+        tx.commit().await.unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+        let record_before = get(&mut tx, &invariant_id).await.unwrap().unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(record_before.asserts, "x > 0");
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        let mut tx = pool.begin().await.unwrap();
+        let created = upsert(&mut tx, &invariant_id, "y < 100").await.unwrap();
+        tx.commit().await.unwrap();
+        assert!(!created);
+
+        let mut tx = pool.begin().await.unwrap();
+        let record_after = get(&mut tx, &invariant_id).await.unwrap().unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(record_after.asserts, "y < 100");
+        assert_eq!(record_after.created_at, record_before.created_at);
+        assert!(record_after.updated_at > record_before.updated_at);
     }
 
     #[tokio::test]
