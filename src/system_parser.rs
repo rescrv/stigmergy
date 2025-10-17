@@ -217,7 +217,7 @@ mod component_serde {
                         _ => {
                             return Err(serde::de::Error::custom(
                                 "Component must be a string or a map",
-                            ))
+                            ));
                         }
                     }
                 }
@@ -235,26 +235,23 @@ mod component_serde {
         use std::str::FromStr;
 
         let s = s.trim();
-        
+
         // Find the position of the colon that separates component name from access mode
         // We need to be careful with :: in module paths like std::collections::HashMap
-        let colon_pos = s
-            .char_indices()
-            .rev()
-            .find_map(|(i, c)| {
-                if c == ':' {
-                    // Check if this is part of :: by looking at adjacent characters
-                    if i > 0 && s.as_bytes()[i - 1] == b':' {
-                        None
-                    } else if i + 1 < s.len() && s.as_bytes()[i + 1] == b':' {
-                        None
-                    } else {
-                        Some(i)
-                    }
-                } else {
+        let colon_pos = s.char_indices().rev().find_map(|(i, c)| {
+            if c == ':' {
+                // Check if this is part of :: by looking at adjacent characters
+                if i > 0 && s.as_bytes()[i - 1] == b':' {
                     None
+                } else if i + 1 < s.len() && s.as_bytes()[i + 1] == b':' {
+                    None
+                } else {
+                    Some(i)
                 }
-            });
+            } else {
+                None
+            }
+        });
 
         if let Some(colon_pos) = colon_pos {
             let component_str = s[..colon_pos].trim();
@@ -676,25 +673,20 @@ impl SystemParser {
         // Find the position of the colon that separates component name from access mode
         // We need to be careful with :: in module paths like std::collections::HashMap
         // Strategy: find the last colon that's either followed by whitespace or is at a word boundary
-        let colon_pos = component_expr
-            .char_indices()
-            .rev()
-            .find_map(|(i, c)| {
-                if c == ':' {
-                    // Check if this is part of :: by looking at the previous character
-                    if i > 0 && component_expr.as_bytes()[i - 1] == b':' {
-                        None
-                    } else if i + 1 < component_expr.len()
-                        && component_expr.as_bytes()[i + 1] == b':'
-                    {
-                        None
-                    } else {
-                        Some(i)
-                    }
-                } else {
+        let colon_pos = component_expr.char_indices().rev().find_map(|(i, c)| {
+            if c == ':' {
+                // Check if this is part of :: by looking at the previous character
+                if i > 0 && component_expr.as_bytes()[i - 1] == b':' {
                     None
+                } else if i + 1 < component_expr.len() && component_expr.as_bytes()[i + 1] == b':' {
+                    None
+                } else {
+                    Some(i)
                 }
-            });
+            } else {
+                None
+            }
+        });
 
         if let Some(colon_pos) = colon_pos {
             let component_name = component_expr[..colon_pos].trim();
@@ -707,9 +699,8 @@ impl SystemParser {
                 )
             })?;
 
-            let access = AccessMode::from_str(access_str).map_err(|err| {
-                ParseError::ComponentParseError(component_expr.to_string(), err)
-            })?;
+            let access = AccessMode::from_str(access_str)
+                .map_err(|err| ParseError::ComponentParseError(component_expr.to_string(), err))?;
 
             Ok(ComponentAccess::new(component, access))
         } else {
