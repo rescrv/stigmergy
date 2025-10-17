@@ -140,6 +140,7 @@
 //!
 
 #![deny(missing_docs)]
+mod apply;
 mod bid;
 mod component;
 mod component_definition;
@@ -184,6 +185,7 @@ pub mod commands;
 /// stigmergy HTTP APIs, handling requests, responses, and error conditions.
 pub mod http_utils;
 
+pub use apply::{ApplyRequest, ApplyResponse, Operation, OperationResult, create_apply_router};
 pub use bid::{
     Bid, BidParseError, BidParser, BinaryOperator, EntityResolver, EvaluationError, Expression,
     Position, UnaryOperator,

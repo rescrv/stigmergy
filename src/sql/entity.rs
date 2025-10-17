@@ -72,6 +72,42 @@ pub async fn create(tx: &mut Transaction<'_, Postgres>, entity: &Entity) -> SqlR
     }
 }
 
+/// Creates a new entity in the database if it doesn't exist.
+///
+/// # Arguments
+/// * `tx` - PostgreSQL transaction
+/// * `entity` - The entity to create
+///
+/// # Returns
+/// * `Ok(true)` - Entity was created (didn't exist before)
+/// * `Ok(false)` - Entity already exists (no-op)
+/// * `Err(DataStoreError::Internal)` - Database error
+pub async fn create_idempotent(
+    tx: &mut Transaction<'_, Postgres>,
+    entity: &Entity,
+) -> SqlResult<bool> {
+    let entity_bytes = entity.as_bytes();
+
+    let result = sqlx::query!(
+        r#"
+        INSERT INTO entities (entity_id)
+        VALUES ($1)
+        ON CONFLICT (entity_id) DO NOTHING
+        "#,
+        entity_bytes.as_slice()
+    )
+    .execute(&mut **tx)
+    .await;
+
+    match result {
+        Ok(result) => Ok(result.rows_affected() > 0),
+        Err(e) => {
+            eprintln!("Database error creating entity idempotently: {}", e);
+            Err(DataStoreError::Internal(e.to_string()))
+        }
+    }
+}
+
 /// Retrieves an entity from the database.
 ///
 /// # Arguments
