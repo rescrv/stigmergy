@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO component_instances (entity_id, component_name, data)\n        VALUES ($1, $2, $3)\n        ON CONFLICT (entity_id, component_name) \n        DO UPDATE SET data = EXCLUDED.data, updated_at = CURRENT_TIMESTAMP\n        RETURNING (xmax = 0) as \"was_insert!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "was_insert!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Varchar",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d9769481c68e24a2de86b998906b22b837041635bdaf3dade047eb4da183b477"
+}

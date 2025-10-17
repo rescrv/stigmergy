@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO entities (entity_id)\n        VALUES ($1)\n        ON CONFLICT (entity_id) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0b16b2ce1a6f5c5c446aada79c536fd63513f3213ecc8e5c16f3330927e6d1d5"
+}

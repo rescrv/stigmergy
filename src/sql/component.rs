@@ -177,6 +177,55 @@ pub async fn update(
     }
 }
 
+/// Upserts a component instance in the database.
+///
+/// # Arguments
+/// * `tx` - PostgreSQL transaction
+/// * `entity` - The entity to attach the component to
+/// * `component` - The component type
+/// * `data` - The component data
+///
+/// # Returns
+/// * `Ok(true)` - Component instance was created (didn't exist before)
+/// * `Ok(false)` - Component instance was updated (existed before)
+/// * `Err(DataStoreError::NotFound)` - Entity or component definition not found
+/// * `Err(DataStoreError::Internal)` - Database error
+pub async fn upsert(
+    tx: &mut Transaction<'_, Postgres>,
+    entity: &Entity,
+    component: &Component,
+    data: &Value,
+) -> SqlResult<bool> {
+    let entity_bytes = entity.as_bytes();
+    let component_name = component.as_str();
+
+    let result = sqlx::query!(
+        r#"
+        INSERT INTO component_instances (entity_id, component_name, data)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (entity_id, component_name) 
+        DO UPDATE SET data = EXCLUDED.data, updated_at = CURRENT_TIMESTAMP
+        RETURNING (xmax = 0) as "was_insert!"
+        "#,
+        entity_bytes.as_slice(),
+        component_name,
+        data
+    )
+    .fetch_one(&mut **tx)
+    .await;
+
+    match result {
+        Ok(row) => Ok(row.was_insert),
+        Err(sqlx::Error::Database(db_err)) if db_err.is_foreign_key_violation() => {
+            Err(DataStoreError::NotFound)
+        }
+        Err(e) => {
+            eprintln!("Database error upserting component instance: {}", e);
+            Err(DataStoreError::Internal(e.to_string()))
+        }
+    }
+}
+
 /// Deletes a component instance from the database.
 ///
 /// # Arguments
@@ -573,5 +622,39 @@ mod tests {
         let components = list_for_entity(&mut tx, &entity).await.unwrap();
         tx.commit().await.unwrap();
         assert!(components.is_empty());
+    }
+
+    #[tokio::test]
+    async fn upsert_returns_correct_created_flag() {
+        let pool = super::super::tests::setup_test_db().await;
+
+        let entity = unique_entity("upsert_created_flag");
+        let component = Component::new("StatusFlag").unwrap();
+        let data1 = json!({"status": "active"});
+        let data2 = json!({"status": "inactive"});
+
+        let mut tx = pool.begin().await.unwrap();
+        crate::sql::entity::create(&mut tx, &entity).await.unwrap();
+
+        let def = crate::ComponentDefinition::new(
+            component.clone(),
+            json!({"type": "object", "properties": {"status": {"type": "string"}}}),
+        );
+        crate::sql::component_definition::create(&mut tx, &def)
+            .await
+            .unwrap();
+
+        let created_first = upsert(&mut tx, &entity, &component, &data1).await.unwrap();
+        println!("First upsert created flag: {}", created_first);
+        assert!(created_first);
+
+        let created_second = upsert(&mut tx, &entity, &component, &data2).await.unwrap();
+        println!("Second upsert created flag: {}", created_second);
+        assert!(!created_second);
+
+        let retrieved = get(&mut tx, &entity, &component).await.unwrap().unwrap();
+        assert_eq!(retrieved, data2);
+
+        tx.commit().await.unwrap();
     }
 }
