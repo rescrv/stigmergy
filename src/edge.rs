@@ -133,7 +133,25 @@ async fn create_edge(
             Ok(Json(response))
         }
         Err(crate::errors::DataStoreError::AlreadyExists) => {
-            Err((StatusCode::CONFLICT, "edge already exists"))
+            let existing_edge = sql::edge::get(&mut tx, &edge.src, &edge.dst, &edge.label)
+                .await
+                .map_err(|_e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "failed to retrieve existing edge",
+                    )
+                })?;
+            tx.commit().await.map_err(|_e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to commit transaction",
+                )
+            })?;
+            let response = CreateEdgeResponse {
+                edge: existing_edge,
+                created: false,
+            };
+            Ok(Json(response))
         }
         Err(_e) => Err((StatusCode::INTERNAL_SERVER_ERROR, "failed to create edge")),
     }
@@ -409,7 +427,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_edge_duplicate_fails() {
+    async fn create_edge_duplicate() {
         let pool = crate::sql::tests::setup_test_db().await;
 
         let src = unique_entity("duplicate_edge_src");
@@ -738,5 +756,53 @@ mod tests {
         let mut tx = pool.begin().await.unwrap();
         let edges = sql::edge::list_all(&mut tx).await.unwrap();
         assert!(!edges.iter().any(|e| e.src == src));
+    }
+
+    #[tokio::test]
+    async fn create_edge_idempotent_handler() {
+        use axum_test::TestServer;
+
+        let pool = crate::sql::tests::setup_test_db().await;
+
+        let src = unique_entity("handler_idempotent_src");
+        let dst = unique_entity("handler_idempotent_dst");
+        let label = unique_entity("handler_idempotent_label");
+
+        let mut tx = pool.begin().await.unwrap();
+        sql::entity::create(&mut tx, &src).await.unwrap();
+        sql::entity::create(&mut tx, &dst).await.unwrap();
+        sql::entity::create(&mut tx, &label).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let router = create_edge_router(pool.clone());
+        let server = TestServer::new(router).unwrap();
+
+        let request_body = CreateEdgeRequest { src, dst, label };
+
+        let response = server.post("/edge").json(&request_body).await;
+
+        response.assert_status_ok();
+        let first_response: CreateEdgeResponse = response.json();
+        println!(
+            "create_edge_idempotent_handler first response: {:?}",
+            first_response
+        );
+        assert!(first_response.created);
+        assert_eq!(first_response.edge.src, src);
+        assert_eq!(first_response.edge.dst, dst);
+        assert_eq!(first_response.edge.label, label);
+
+        let response = server.post("/edge").json(&request_body).await;
+
+        response.assert_status_ok();
+        let second_response: CreateEdgeResponse = response.json();
+        println!(
+            "create_edge_idempotent_handler second response: {:?}",
+            second_response
+        );
+        assert!(!second_response.created);
+        assert_eq!(second_response.edge.src, src);
+        assert_eq!(second_response.edge.dst, dst);
+        assert_eq!(second_response.edge.label, label);
     }
 }
