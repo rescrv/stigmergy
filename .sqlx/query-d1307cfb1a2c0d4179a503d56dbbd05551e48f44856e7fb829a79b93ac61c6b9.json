@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT src_entity, dst_entity, label_entity\n        FROM edges\n        WHERE label_entity = $1\n        ORDER BY created_at\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "src_entity",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 1,
+        "name": "dst_entity",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 2,
+        "name": "label_entity",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d1307cfb1a2c0d4179a503d56dbbd05551e48f44856e7fb829a79b93ac61c6b9"
+}

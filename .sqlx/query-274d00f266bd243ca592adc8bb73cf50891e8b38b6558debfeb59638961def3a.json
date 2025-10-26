@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO edges (src_entity, dst_entity, label_entity)\n        VALUES ($1, $2, $3)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Bytea",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "274d00f266bd243ca592adc8bb73cf50891e8b38b6558debfeb59638961def3a"
+}
