@@ -5,8 +5,8 @@ use stigmergy::{
     cli_utils::{self, OutputFormat},
     commands::{
         handle_apply_command, handle_component_command, handle_componentdefinition_command,
-        handle_config_command, handle_edge_command, handle_entity_command, handle_entity_command,
-        handle_invariant_command, handle_invariant_command, handle_system_command,
+        handle_config_command, handle_edge_command, handle_entity_command,
+        handle_invariant_command, handle_system_command,
     },
     http_utils,
 };
