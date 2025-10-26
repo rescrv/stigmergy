@@ -144,6 +144,7 @@ mod apply;
 mod bid;
 mod component;
 mod component_definition;
+mod config;
 mod entity;
 mod errors;
 mod invariant;
@@ -195,6 +196,10 @@ pub use component::{
     create_component_instance_router,
 };
 pub use component_definition::{ComponentDefinition, create_component_definition_router};
+pub use config::{
+    Config, GetConfigResponse, IoSystem, PostConfigRequest, PostConfigResponse,
+    create_config_router, load_latest_config, save_config,
+};
 pub use entity::{
     CreateEntityRequest, CreateEntityResponse, Entity, EntityParseError, create_entity_router,
 };

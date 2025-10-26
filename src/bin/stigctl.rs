@@ -5,7 +5,8 @@ use stigmergy::{
     cli_utils::{self, OutputFormat},
     commands::{
         handle_apply_command, handle_component_command, handle_componentdefinition_command,
-        handle_entity_command, handle_invariant_command, handle_system_command,
+        handle_config_command, handle_entity_command, handle_invariant_command,
+        handle_system_command,
     },
     http_utils,
 };
@@ -29,6 +30,8 @@ Options:
 
 Commands:
   apply <directory>                            Apply configuration from directory
+  config get                                   Get the current configuration
+  config set <file.json|file.yaml>            Set configuration from file
   entity create                                Create a new entity
   entity list                                  List all entities
   entity delete <entity-id>                    Delete an entity
@@ -74,6 +77,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "apply" => {
             handle_apply_command(&free[1..], &client).await;
         }
+        "config" => {
+            handle_config_command(&free[1..], &client, options.output).await;
+        }
         "entity" => {
             handle_entity_command(&free[1..], &client, options.output).await;
         }
@@ -91,7 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => {
             cli_utils::exit_with_error(&format!(
-                "Unknown command '{}'. Available commands: apply, entity, system, componentdefinition, component, invariant",
+                "Unknown command '{}'. Available commands: apply, config, entity, system, componentdefinition, component, invariant",
                 free[0]
             ));
         }
