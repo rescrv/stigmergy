@@ -6,8 +6,8 @@ use tokio::signal;
 
 use stigmergy::{
     create_apply_router, create_component_definition_router, create_component_instance_router,
-    create_config_router, create_entity_router, create_invariant_router, create_system_router,
-    load_latest_config,
+    create_config_router, create_edge_router, create_entity_router, create_invariant_router,
+    create_system_router, load_latest_config,
 };
 
 #[derive(CommandLine, Default, PartialEq, Eq)]
@@ -142,6 +142,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let invariant_router = create_invariant_router(pool.clone());
     let apply_router = create_apply_router(pool.clone());
     let config_router = create_config_router(pool.clone());
+    let edge_router = create_edge_router(pool.clone());
 
     let app = Router::new()
         .nest("/api/v1", entity_router)
@@ -150,7 +151,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nest("/api/v1", system_router)
         .nest("/api/v1", invariant_router)
         .nest("/api/v1", apply_router)
-        .nest("/api/v1", config_router);
+        .nest("/api/v1", config_router)
+        .nest("/api/v1", edge_router);
 
     // Bind to address
     let addr = format!("{}:{}", config.host, config.port);

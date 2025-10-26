@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        DELETE FROM edges\n        WHERE src_entity = $1 AND dst_entity = $2 AND label_entity = $3\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Bytea",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4db6692c2101b1bc3c0bea45ab90a1dfb4f2f0cf04bd57b679e421381081f781"
+}

@@ -145,6 +145,7 @@ mod bid;
 mod component;
 mod component_definition;
 mod config;
+mod edge;
 mod entity;
 mod errors;
 mod invariant;
@@ -186,32 +187,33 @@ pub mod commands;
 /// stigmergy HTTP APIs, handling requests, responses, and error conditions.
 pub mod http_utils;
 
-pub use apply::{ApplyRequest, ApplyResponse, Operation, OperationResult, create_apply_router};
+pub use apply::{create_apply_router, ApplyRequest, ApplyResponse, Operation, OperationResult};
 pub use bid::{
     Bid, BidParseError, BidParser, BinaryOperator, EntityResolver, EvaluationError, Expression,
     Position, UnaryOperator,
 };
 pub use component::{
-    Component, ComponentListItem, CreateComponentRequest, CreateComponentResponse,
-    create_component_instance_router,
+    create_component_instance_router, Component, ComponentListItem, CreateComponentRequest,
+    CreateComponentResponse,
 };
-pub use component_definition::{ComponentDefinition, create_component_definition_router};
+pub use component_definition::{create_component_definition_router, ComponentDefinition};
 pub use config::{
-    Config, GetConfigResponse, IoSystem, PostConfigRequest, PostConfigResponse,
-    create_config_router, load_latest_config, save_config,
+    create_config_router, load_latest_config, save_config, Config, GetConfigResponse, IoSystem,
+    PostConfigRequest, PostConfigResponse,
 };
+pub use edge::{create_edge_router, CreateEdgeRequest, CreateEdgeResponse, Edge};
 pub use entity::{
-    CreateEntityRequest, CreateEntityResponse, Entity, EntityParseError, create_entity_router,
+    create_entity_router, CreateEntityRequest, CreateEntityResponse, Entity, EntityParseError,
 };
 pub use errors::DataStoreError;
 pub use invariant::{
-    CreateInvariantRequest, CreateInvariantResponse, GetInvariantResponse, InvariantID,
-    InvariantIDParseError, UpdateInvariantRequest, create_invariant_router,
+    create_invariant_router, CreateInvariantRequest, CreateInvariantResponse, GetInvariantResponse,
+    InvariantID, InvariantIDParseError, UpdateInvariantRequest,
 };
 pub use json_schema::{JsonSchema, JsonSchemaBuilder};
 pub use system::{
-    CreateSystemFromMarkdownRequest, CreateSystemResponse, System, SystemListItem, SystemName,
-    SystemNameParseError, create_system_router,
+    create_system_router, CreateSystemFromMarkdownRequest, CreateSystemResponse, System,
+    SystemListItem, SystemName, SystemNameParseError,
 };
 pub use system_parser::{AccessMode, ComponentAccess, ParseError, SystemConfig, SystemParser};
-pub use validate::{ValidationError, validate_value};
+pub use validate::{validate_value, ValidationError};

@@ -27,4 +27,16 @@ impl std::fmt::Display for DataStoreError {
     }
 }
 
+impl From<sqlx::Error> for DataStoreError {
+    fn from(e: sqlx::Error) -> Self {
+        match e {
+            sqlx::Error::RowNotFound => DataStoreError::NotFound,
+            sqlx::Error::Database(db_err) if db_err.is_unique_violation() => {
+                DataStoreError::AlreadyExists
+            }
+            _ => DataStoreError::Internal(e.to_string()),
+        }
+    }
+}
+
 impl std::error::Error for DataStoreError {}
