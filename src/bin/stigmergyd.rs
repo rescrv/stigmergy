@@ -6,7 +6,8 @@ use tokio::signal;
 
 use stigmergy::{
     create_apply_router, create_component_definition_router, create_component_instance_router,
-    create_entity_router, create_invariant_router, create_system_router,
+    create_config_router, create_entity_router, create_invariant_router, create_system_router,
+    load_latest_config,
 };
 
 #[derive(CommandLine, Default, PartialEq, Eq)]
@@ -78,6 +79,10 @@ API ENDPOINTS:
       PUT    /api/v1/invariant/{id}  Update an invariant
       DELETE /api/v1/invariant/{id}  Delete an invariant
 
+    Configuration:
+      GET    /api/v1/config          Get current configuration
+      POST   /api/v1/config          Update configuration
+
     Batch Operations:
       POST   /api/v1/apply           Apply batch of operations transactionally"#;
 
@@ -117,6 +122,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Database migrations completed");
     }
 
+    // Load the latest configuration from the database
+    let latest_config = load_latest_config(&pool)
+        .await
+        .map_err(|e| format!("Failed to load latest config: {}", e))?;
+
+    if config.verbose {
+        println!(
+            "Loaded configuration with {} I/O systems",
+            latest_config.io_systems.len()
+        );
+    }
+
     // Create routers
     let entity_router = create_entity_router(pool.clone());
     let component_definition_router = create_component_definition_router(pool.clone());
@@ -124,6 +141,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let system_router = create_system_router(pool.clone());
     let invariant_router = create_invariant_router(pool.clone());
     let apply_router = create_apply_router(pool.clone());
+    let config_router = create_config_router(pool.clone());
 
     let app = Router::new()
         .nest("/api/v1", entity_router)
@@ -131,7 +149,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nest("/api/v1", component_router)
         .nest("/api/v1", system_router)
         .nest("/api/v1", invariant_router)
-        .nest("/api/v1", apply_router);
+        .nest("/api/v1", apply_router)
+        .nest("/api/v1", config_router);
 
     // Bind to address
     let addr = format!("{}:{}", config.host, config.port);
@@ -250,6 +269,10 @@ fn print_api_endpoints() {
     println!("    GET    /api/v1/invariant/{{id}}  Get a specific invariant");
     println!("    PUT    /api/v1/invariant/{{id}}  Update an invariant");
     println!("    DELETE /api/v1/invariant/{{id}}  Delete an invariant");
+    println!();
+    println!("  Configuration:");
+    println!("    GET    /api/v1/config          Get current configuration");
+    println!("    POST   /api/v1/config          Update configuration");
     println!();
     println!("  Batch Operations:");
     println!("    POST   /api/v1/apply           Apply batch of operations transactionally");
