@@ -187,33 +187,33 @@ pub mod commands;
 /// stigmergy HTTP APIs, handling requests, responses, and error conditions.
 pub mod http_utils;
 
-pub use apply::{create_apply_router, ApplyRequest, ApplyResponse, Operation, OperationResult};
+pub use apply::{ApplyRequest, ApplyResponse, Operation, OperationResult, create_apply_router};
 pub use bid::{
     Bid, BidParseError, BidParser, BinaryOperator, EntityResolver, EvaluationError, Expression,
     Position, UnaryOperator,
 };
 pub use component::{
-    create_component_instance_router, Component, ComponentListItem, CreateComponentRequest,
-    CreateComponentResponse,
+    Component, ComponentListItem, CreateComponentRequest, CreateComponentResponse,
+    create_component_instance_router,
 };
-pub use component_definition::{create_component_definition_router, ComponentDefinition};
+pub use component_definition::{ComponentDefinition, create_component_definition_router};
 pub use config::{
-    create_config_router, load_latest_config, save_config, Config, GetConfigResponse, IoSystem,
-    PostConfigRequest, PostConfigResponse,
+    Config, GetConfigResponse, IoSystem, PostConfigRequest, PostConfigResponse,
+    create_config_router, load_latest_config, save_config,
 };
-pub use edge::{create_edge_router, CreateEdgeRequest, CreateEdgeResponse, Edge};
+pub use edge::{CreateEdgeRequest, CreateEdgeResponse, Edge, create_edge_router};
 pub use entity::{
-    create_entity_router, CreateEntityRequest, CreateEntityResponse, Entity, EntityParseError,
+    CreateEntityRequest, CreateEntityResponse, Entity, EntityParseError, create_entity_router,
 };
 pub use errors::DataStoreError;
 pub use invariant::{
-    create_invariant_router, CreateInvariantRequest, CreateInvariantResponse, GetInvariantResponse,
-    InvariantID, InvariantIDParseError, UpdateInvariantRequest,
+    CreateInvariantRequest, CreateInvariantResponse, GetInvariantResponse, InvariantID,
+    InvariantIDParseError, UpdateInvariantRequest, create_invariant_router,
 };
 pub use json_schema::{JsonSchema, JsonSchemaBuilder};
 pub use system::{
-    create_system_router, CreateSystemFromMarkdownRequest, CreateSystemResponse, System,
-    SystemListItem, SystemName, SystemNameParseError,
+    CreateSystemFromMarkdownRequest, CreateSystemResponse, System, SystemListItem, SystemName,
+    SystemNameParseError, create_system_router,
 };
 pub use system_parser::{AccessMode, ComponentAccess, ParseError, SystemConfig, SystemParser};
-pub use validate::{validate_value, ValidationError};
+pub use validate::{ValidationError, validate_value};
