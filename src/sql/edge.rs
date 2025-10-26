@@ -102,8 +102,7 @@ pub async fn list_all(tx: &mut Transaction<'_, Postgres>) -> Result<Vec<Edge>, D
     .fetch_all(&mut **tx)
     .await?;
 
-    rows
-        .into_iter()
+    rows.into_iter()
         .map(|row| {
             edge_from_row_bytes(
                 row.src_entity.as_slice(),
@@ -131,8 +130,7 @@ pub async fn list_from(
     .fetch_all(&mut **tx)
     .await?;
 
-    rows
-        .into_iter()
+    rows.into_iter()
         .map(|row| {
             edge_from_row_bytes(
                 row.src_entity.as_slice(),
@@ -160,8 +158,7 @@ pub async fn list_to(
     .fetch_all(&mut **tx)
     .await?;
 
-    rows
-        .into_iter()
+    rows.into_iter()
         .map(|row| {
             edge_from_row_bytes(
                 row.src_entity.as_slice(),
@@ -189,8 +186,7 @@ pub async fn list_labeled(
     .fetch_all(&mut **tx)
     .await?;
 
-    rows
-        .into_iter()
+    rows.into_iter()
         .map(|row| {
             edge_from_row_bytes(
                 row.src_entity.as_slice(),
@@ -220,8 +216,7 @@ pub async fn list_between(
     .fetch_all(&mut **tx)
     .await?;
 
-    rows
-        .into_iter()
+    rows.into_iter()
         .map(|row| {
             edge_from_row_bytes(
                 row.src_entity.as_slice(),

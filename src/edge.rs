@@ -135,9 +135,7 @@ async fn create_edge(
         Err(crate::errors::DataStoreError::AlreadyExists) => {
             Err((StatusCode::CONFLICT, "edge already exists"))
         }
-        Err(_e) => {
-            Err((StatusCode::INTERNAL_SERVER_ERROR, "failed to create edge"))
-        }
+        Err(_e) => Err((StatusCode::INTERNAL_SERVER_ERROR, "failed to create edge")),
     }
 }
 

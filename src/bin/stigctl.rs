@@ -5,8 +5,8 @@ use stigmergy::{
     cli_utils::{self, OutputFormat},
     commands::{
         handle_apply_command, handle_component_command, handle_componentdefinition_command,
-        handle_config_command, handle_entity_command, handle_invariant_command,
-        handle_system_command,
+        handle_config_command, handle_edge_command, handle_entity_command,
+        handle_invariant_command, handle_system_command,
     },
     http_utils,
 };
@@ -51,6 +51,13 @@ Commands:
   component get <entity-id> <comp-id>          Get a component instance by ID for an entity
   component update <entity-id> <comp-id> <data> Update a component instance for an entity
   component delete <entity-id> <comp-id>       Delete a component instance from an entity
+  edge create <src> <dst> <label>              Create a directed labeled edge
+  edge list                                    List all edges
+  edge list --from <src>                       List edges from a source entity
+  edge list --to <dst>                         List edges to a destination entity
+  edge list --labeled <label>                  List edges with a specific label
+  edge get <src> <dst> <label>                 Get a specific edge
+  edge delete <src> <dst> <label>              Delete a specific edge
   invariant create <expression> [id]           Create an invariant
   invariant list                               List all invariants
   invariant get <invariant-id>                 Get an invariant by ID
@@ -95,9 +102,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "invariant" => {
             handle_invariant_command(&free[1..], &client, options.output).await;
         }
+        "edge" => {
+            handle_edge_command(&free[1..], &client, options.output).await;
+        }
         _ => {
             cli_utils::exit_with_error(&format!(
-                "Unknown command '{}'. Available commands: apply, config, entity, system, componentdefinition, component, invariant",
+                "Unknown command '{}'. Available commands: apply, config, entity, system, componentdefinition, component, invariant, edge",
                 free[0]
             ));
         }
