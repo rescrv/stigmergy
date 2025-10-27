@@ -79,7 +79,10 @@ pub async fn create(
     .await;
 
     match result {
-        Ok(_) => Ok(()),
+        Ok(_) => {
+            super::active_entity::upsert(tx, entity, None).await?;
+            Ok(())
+        }
         Err(sqlx::Error::Database(db_err)) if db_err.is_unique_violation() => {
             Err(DataStoreError::AlreadyExists)
         }
@@ -169,7 +172,13 @@ pub async fn update(
     .await;
 
     match result {
-        Ok(result) => Ok(result.rows_affected() > 0),
+        Ok(result) => {
+            let was_updated = result.rows_affected() > 0;
+            if was_updated {
+                super::active_entity::upsert(tx, entity, None).await?;
+            }
+            Ok(was_updated)
+        }
         Err(e) => {
             eprintln!("Database error updating component instance: {}", e);
             Err(DataStoreError::Internal(e.to_string()))
@@ -215,7 +224,10 @@ pub async fn upsert(
     .await;
 
     match result {
-        Ok(row) => Ok(row.was_insert),
+        Ok(row) => {
+            super::active_entity::upsert(tx, entity, None).await?;
+            Ok(row.was_insert)
+        }
         Err(sqlx::Error::Database(db_err)) if db_err.is_foreign_key_violation() => {
             Err(DataStoreError::NotFound)
         }

@@ -21,6 +21,9 @@ pub mod invariants;
 /// Edge operations with automatic timestamp tracking.
 pub mod edge;
 
+/// Active entity operations with automatic timestamp tracking.
+pub mod active_entity;
+
 #[cfg(test)]
 /// Test utilities for PostgreSQL database operations.
 pub mod tests {
