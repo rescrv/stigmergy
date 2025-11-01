@@ -132,24 +132,28 @@ async fn create_edge(
             };
             Ok(Json(response))
         }
-        Err(crate::errors::DataStoreError::NotFound) => match sql::edge::create(&mut tx, &edge).await
-        {
-            Ok(()) => {
-                tx.commit().await.map_err(|_e| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "failed to commit transaction",
-                    )
-                })?;
-                let response = CreateEdgeResponse {
-                    edge,
-                    created: true,
-                };
-                Ok(Json(response))
+        Err(crate::errors::DataStoreError::NotFound) => {
+            match sql::edge::create(&mut tx, &edge).await {
+                Ok(()) => {
+                    tx.commit().await.map_err(|_e| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "failed to commit transaction",
+                        )
+                    })?;
+                    let response = CreateEdgeResponse {
+                        edge,
+                        created: true,
+                    };
+                    Ok(Json(response))
+                }
+                Err(_e) => Err((StatusCode::INTERNAL_SERVER_ERROR, "failed to create edge")),
             }
-            Err(_e) => Err((StatusCode::INTERNAL_SERVER_ERROR, "failed to create edge")),
-        },
-        Err(_e) => Err((StatusCode::INTERNAL_SERVER_ERROR, "failed to retrieve edge state")),
+        }
+        Err(_e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to retrieve edge state",
+        )),
     }
 }
 

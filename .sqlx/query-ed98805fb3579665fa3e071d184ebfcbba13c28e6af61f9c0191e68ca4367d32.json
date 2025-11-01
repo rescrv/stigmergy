@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO active_entity (entity_id, system_name)\n        VALUES ($1, $2)\n        ON CONFLICT (entity_id)\n        DO UPDATE SET system_name = EXCLUDED.system_name, updated_at = CURRENT_TIMESTAMP\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Varchar"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ed98805fb3579665fa3e071d184ebfcbba13c28e6af61f9c0191e68ca4367d32"
+}

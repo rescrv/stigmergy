@@ -61,7 +61,10 @@ pub async fn create(tx: &mut Transaction<'_, Postgres>, entity: &Entity) -> SqlR
     .await;
 
     match result {
-        Ok(_) => Ok(()),
+        Ok(_) => {
+            super::active_entity::upsert(tx, entity, None).await?;
+            Ok(())
+        }
         Err(sqlx::Error::Database(db_err)) if db_err.is_unique_violation() => {
             Err(DataStoreError::AlreadyExists)
         }
@@ -100,7 +103,13 @@ pub async fn create_idempotent(
     .await;
 
     match result {
-        Ok(result) => Ok(result.rows_affected() > 0),
+        Ok(result) => {
+            let was_created = result.rows_affected() > 0;
+            if was_created {
+                super::active_entity::upsert(tx, entity, None).await?;
+            }
+            Ok(was_created)
+        }
         Err(e) => {
             eprintln!("Database error creating entity idempotently: {}", e);
             Err(DataStoreError::Internal(e.to_string()))
